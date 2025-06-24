@@ -11,7 +11,7 @@
 Switch IDA console from **IDC** to **Python**, and run the following:
 
 ```python
-import urllib.request; exec(urllib.request.urlopen("https://raw.githubusercontent.com/zenyard/decompai-ida-public/main/install_from_ida.py").read())
+GIT_TOKEN="<GIT_TOKEN>"; import urllib.request; import base64; req = urllib.request.Request("https://raw.githubusercontent.com/zenyard/decompai-ida-public/main/install_from_ida.py"); req.add_header("Authorization", f"Basic {base64.b64encode(GIT_TOKEN.encode('utf-8')).decode('utf-8')}"; exec(urllib.request.urlopen(req).read())
 ```
 
 This will run a script performing the steps in next section.

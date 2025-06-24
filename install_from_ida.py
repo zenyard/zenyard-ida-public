@@ -1,6 +1,7 @@
 # Quick installation from IDA, based on:
 #   https://github.com/eset/ipyida/blob/master/install_from_ida.py
 
+import base64
 import json
 import shutil
 import subprocess
@@ -9,14 +10,17 @@ import threading
 import typing as ty
 from pathlib import Path
 from textwrap import indent
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 from uuid import UUID, uuid4
 
 import ida_diskio
 import ida_kernwin
 
 API_URL = "https://api.zenyard.ai"
-INSTALL_LOCATION = "git+https://github.com/zenyard/decompai-ida-public.git"
+GIT_TOKEN = globals().get("GIT_TOKEN")
+INSTALL_LOCATION = (
+    f"git+https://{GIT_TOKEN}@github.com/zenyard/decompai-ida-public.git"
+)
 STUB_FILE_URL = "https://raw.githubusercontent.com/zenyard/decompai-ida-public/main/decompai_stub.py"
 
 user_dir = Path(ida_diskio.get_user_idadir())
@@ -27,6 +31,9 @@ config_path = user_dir / "decompai.json"
 
 def main():
     try:
+        if not isinstance(GIT_TOKEN, str):
+            raise Exception("Missing or invalid git token")
+
         config_exists = stub_path.exists()
 
         check_prerequisites()
@@ -41,7 +48,7 @@ def main():
         install_or_upgrade_package(INSTALL_LOCATION, target=packages_path)
 
         print("[+] Installing plugin stub file")
-        install_stub_file()
+        install_stub_file(GIT_TOKEN)
 
         if not config_exists:
             print("[+] Installing API key")
@@ -186,11 +193,16 @@ def python_executable() -> Path:
     return existing
 
 
-def install_stub_file():
+def install_stub_file(git_token: str):
     stub_path.parent.mkdir(parents=True, exist_ok=True)
 
+    req = Request(STUB_FILE_URL)
+    req.add_header(
+        "Authorization",
+        f"Basic {base64.b64encode(git_token.encode('utf-8')).decode('utf-8')}",
+    )
     with (
-        urlopen(STUB_FILE_URL) as remote_input,
+        urlopen(req) as remote_input,
         stub_path.open("wb") as local_output,
     ):
         shutil.copyfileobj(remote_input, local_output)
