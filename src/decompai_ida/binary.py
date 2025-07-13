@@ -1,9 +1,9 @@
 import gzip
 import io
-from pathlib import Path
 import shutil
 import typing as ty
 from dataclasses import dataclass
+from pathlib import Path
 
 import anyio
 import ida_loader
@@ -15,8 +15,7 @@ from anyio import to_thread
 from decompai_ida import ida_tasks
 
 
-@ida_tasks.wrap
-def get_size() -> int:
+def get_size_sync() -> int:
     """
     Gets approximate size of the input binary, by summing sizes of segments
     that are mapped to input file.
@@ -36,14 +35,20 @@ def get_size() -> int:
     )
 
 
-@ida_tasks.wrap
-def get_binary_path() -> Path:
+def get_binary_path_sync() -> Path:
+    if not is_idb_open_sync():
+        raise Exception("No database")
     return Path(ida_nalt.get_input_file_path())
 
 
-@ida_tasks.wrap
-def get_idb_path() -> Path:
+def get_idb_path_sync() -> Path:
+    if not is_idb_open_sync():
+        raise Exception("No database")
     return Path(ida_loader.get_path(ida_loader.PATH_TYPE_IDB))
+
+
+def is_idb_open_sync() -> bool:
+    return len(ida_loader.get_path(ida_loader.PATH_TYPE_IDB)) > 0
 
 
 @dataclass(frozen=True)
@@ -54,12 +59,12 @@ class InputFile:
 
 async def read_compressed_input_file() -> InputFile:
     # Prefer original binary
-    input_path = anyio.Path(await get_binary_path())
+    input_path = anyio.Path(await ida_tasks.run(get_binary_path_sync))
     name = "binary.gz"
 
     if not await input_path.exists():
         # Fallback to IDB
-        input_path = anyio.Path(await get_idb_path())
+        input_path = anyio.Path(await ida_tasks.run(get_idb_path_sync))
         name = "idb.gz"
 
     if not await input_path.exists():

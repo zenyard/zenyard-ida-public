@@ -1,7 +1,7 @@
 # Pre-requisites
 
 - IDA 9 Pro.
-- Python 3.9 or newer with Pip. Use `idapyswitch` (in your IDA installation
+- Python 3.10 or newer with Pip. Use `idapyswitch` (in your IDA installation
   folder) to configure which Python environment is used by IDA. Note that IDA
   versions are incompatible with later Python releases.
 - Git (for installation).

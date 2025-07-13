@@ -1,287 +1,242 @@
-from dataclasses import dataclass
-from inspect import cleandoc
-
-import anyio
-import exceptiongroup
-import ida_kernwin
 import typing as ty
 
-from decompai_client import BinariesApi, PostBinaryBody
+import anyio
+from decompai_ida.copilot_task import CopilotTask
+from decompai_ida.copilot_mcp_server_task import CopilotMCPServerTask
+import exceptiongroup
+from anyio.abc import ObjectReceiveStream
+
+from decompai_client import BinariesApi, UserApi
 from decompai_client.exceptions import ForbiddenException, UnauthorizedException
 from decompai_ida import (
     api,
     binary,
     configuration,
-    ida_events,
     ida_tasks,
     logger,
-    state,
-    status,
+    messages,
+)
+from decompai_ida.apply_pending_inferences_task import (
+    ApplyPendingInferencesTask,
 )
 from decompai_ida.async_utils import wait_for_object_of_type
-from decompai_ida.broadcast import Broadcast, RecordLatest
-from decompai_ida.env import Env
-from decompai_ida.inferences import clear_inferences_marks_task
-from decompai_ida.monitor_analysis import monitor_analysis
-from decompai_ida.poll_server_status import poll_server_status_task
-from decompai_ida.poll_inferences import poll_inferences_task
-from decompai_ida.state import StateNodes
-from decompai_ida.track_changes import track_changes_task
-from decompai_ida.upload_revisions import (
-    UploadRevisionsOptions,
-    upload_revisions_task,
+from decompai_ida.broadcast import Broadcast
+from decompai_ida.broadcast_ida_events_task import (
+    BroadcastHexRaysEventsTask,
+    BroadcastIdaEventsTask,
 )
+from decompai_ida.clear_inference_marks_task import ClearInferenceMarksTask
+from decompai_ida.download_inferences_task import DownloadInferencesTask
+from decompai_ida.events import (
+    DatabaseClosed,
+    DatabaseOpened,
+    EventRecorder,
+    IdaEvent,
+)
+from decompai_ida.maintain_tid_to_object_task import MaintainTidToObjectTask
+from decompai_ida.model import CopilotModel, Model
+from decompai_ida.monitor_initial_analysis_task import (
+    MonitorInitialAnalysisTask,
+)
+from decompai_ida.poll_server_status_task import PollServerStatusTask
+from decompai_ida.register_binary_task import RegisterBinaryTask
+from decompai_ida.show_initial_upload_message_task import (
+    ShowInitialUploadMessageTask,
+)
+from decompai_ida.start_foreground_tasks_task import StartForegroundTasksTask
+from decompai_ida.tasks import (
+    GlobalTask,
+    GlobalTaskContext,
+    StaticConfiguration,
+    Task,
+    TaskContext,
+)
+from decompai_ida.track_changes_task import TrackChangesTask
+from decompai_ida.track_ida_settled_task import TrackIdaSettledTask
+from decompai_ida.trigger_apply_inferences_task import (
+    TriggerApplyInferencesTask,
+)
+from decompai_ida.trigger_initial_upload_task import TriggerInitialUploadTask
+from decompai_ida.ui.ui_task import UiTask
+from decompai_ida.ui.copilot_ui_task import CopilotUiTask
+from decompai_ida.upload_original_files_task import UploadOriginalFilesTask
+from decompai_ida.upload_revisions_task import UploadRevisionsTask
 
 _MAX_SUPPORTED_BINARY_SIZE_MB = 10
 
-_UPLOAD_OPTIONS = UploadRevisionsOptions(
-    max_objects_per_revision=256,
-    max_revision_bytes=3 * 1024 * 1024,
-    max_pending_revisions=8,
-    buffer_changes_period=1,
+_STATIC_CONFIG = StaticConfiguration(
+    max_objects_in_revision=512,
+    max_upload_bytes=2 * 1024 * 1024,
 )
 
-_stop: ty.Callable = lambda: None  # noqa: E731
+# Tasks that run without any database open.
+_GLOBAL_TASKS: ty.Collection[type[GlobalTask]] = (BroadcastIdaEventsTask,)
+
+# Tasks that run when a DB is open (inactive or active).
+_TASKS: ty.Collection[type[Task]] = (
+    BroadcastHexRaysEventsTask,
+    ClearInferenceMarksTask,
+    MaintainTidToObjectTask,
+    TrackChangesTask,
+    TrackIdaSettledTask,
+    UiTask,
+    CopilotUiTask,
+)
+
+# Tasks that run when a DB is open and plugin is active.
+_ACTIVE_TASKS: ty.Collection[type[Task]] = (
+    ApplyPendingInferencesTask,
+    DownloadInferencesTask,
+    MonitorInitialAnalysisTask,
+    PollServerStatusTask,
+    RegisterBinaryTask,
+    ShowInitialUploadMessageTask,
+    StartForegroundTasksTask,
+    TriggerApplyInferencesTask,
+    TriggerInitialUploadTask,
+    UploadOriginalFilesTask,
+    UploadRevisionsTask,
+    CopilotTask,
+    CopilotMCPServerTask,
+)
+
+_stop: ty.Callable[[bool], None] = lambda _: None  # noqa: E731
 
 
-def stop():
+def stop(restart=False):
     "Stop the plugin for this IDA session"
-    _stop()
+    _stop(restart)
 
 
-async def main(event_collector: ida_events.EventCollector):
+async def main():
     global _stop
+    ida_tasks.AsyncCallback.set_event_loop()
+    should_restart = True
 
-    try:
-        # Use task group to ensure all exceptions are grouped.
-        async with anyio.create_task_group() as tg:
-            _stop = ida_tasks.AsyncCallback(tg.cancel_scope.cancel)
+    while should_restart:
+        should_restart = False
 
-            # Start pumping events to broadcast.
-            events = Broadcast[ida_events.Event](ida_events.EventRecorder())
-            await event_collector.set_async_handler(events.post)
+        try:
+            async with (
+                # Open TaskGroup first to wrap all exceptions with ExceptiopGroup
+                anyio.create_task_group() as tg,
+                api.open_api_client() as api_client,
+            ):
 
-            # Read configuration early to detect issues.
-            plugin_config = await configuration.read_configuration()
+                def stop(restart: bool):
+                    nonlocal should_restart
+                    should_restart = restart
+                    tg.cancel_scope.cancel()
 
-            await _watch_for_database(
-                _GlobalEnv(
-                    event_collector=event_collector,
-                    events=events,
-                    plugin_config=plugin_config,
+                _stop = ida_tasks.AsyncCallback(stop)
+
+                ida_events = Broadcast[IdaEvent](EventRecorder())
+                global_context = GlobalTaskContext(
+                    ida_events=ida_events,
+                    static_config=_STATIC_CONFIG,
+                    api_client=api_client,
                 )
+
+                for global_task_type in _GLOBAL_TASKS:
+                    tg.start_soon(global_task_type(global_context).run)
+
+                await _spawn_tasks_when_db_opens(global_context)
+
+        except exceptiongroup.ExceptionGroup as ex:
+            config_path = await ida_tasks.run(
+                configuration.get_config_path_sync
             )
 
-    except exceptiongroup.ExceptionGroup as ex:
-        config_path = await configuration.get_config_path()
+            if ex.subgroup(configuration.BadConfigurationFile):
+                await messages.warn_bad_configuration(config_path=config_path)
+            else:
+                exceptiongroup.print_exception(ex)
 
-        if ex.subgroup(configuration.BadConfigurationFile):
-            await ida_tasks.run_ui(
-                ida_kernwin.warning,
-                f"Bad or missing DecompAI configuration at '{config_path}.'\n\n"
-                "Correct the configuration and restart IDA to enable DecompAI.",
-            )
-        elif ex.subgroup((UnauthorizedException, ForbiddenException)):
-            await ida_tasks.run_ui(
-                ida_kernwin.warning,
-                f"Bad DecompAI credentials at '{config_path}.'\n\n"
-                "Correct the configuration and restart IDA to enable DecompAI.",
-            )
-        else:
-            exceptiongroup.print_exception(ex)
-
-    finally:
-        _stop = lambda: None  # noqa: E731
+        finally:
+            _stop = lambda _: None  # noqa: E731
 
 
-@dataclass(frozen=True)
-class _GlobalEnv:
-    event_collector: ida_events.EventCollector
-    events: Broadcast[ida_events.Event]
-    plugin_config: configuration.PluginConfiguration
-
-
-async def _watch_for_database(global_env: _GlobalEnv):
-    """
-    Watches when a database is opened or closed, spawns `_database_flow`.
-    """
-    async with global_env.events.subscribe() as event_receiver:
+async def _spawn_tasks_when_db_opens(global_context: GlobalTaskContext):
+    async with global_context.ida_events.subscribe() as event_receiver:
         while True:
-            await wait_for_object_of_type(
-                event_receiver, ida_events.DatabaseOpened
-            )
+            await wait_for_object_of_type(event_receiver, DatabaseOpened)
 
             async with anyio.create_task_group() as tg:
-                tg.start_soon(_database_flow, global_env)
-
-                await wait_for_object_of_type(
-                    event_receiver, ida_events.DatabaseClosed
+                tg.start_soon(
+                    _cancel_on_database_close, event_receiver, tg.cancel_scope
                 )
+                await _spawn_tasks(global_context)
 
-                tg.cancel_scope.cancel()
+
+async def _cancel_on_database_close(
+    event_receiver: ObjectReceiveStream[IdaEvent], scope: anyio.CancelScope
+):
+    await wait_for_object_of_type(event_receiver, DatabaseClosed)
+    scope.cancel()
 
 
-async def _database_flow(global_env: _GlobalEnv):
-    idb_path = await binary.get_idb_path()
+async def _spawn_tasks(global_context: GlobalTaskContext):
+    # Save model to global, to allow interactive access.
+    global model
+
+    idb_path = await ida_tasks.run(binary.get_idb_path_sync)
     log_path = idb_path.with_suffix(".log")
 
-    async with (
-        logger.open(log_path, global_env.plugin_config.log_level),
-        # Note that hooking Hexrays_Hooks in plugin entry crashes.
-        ida_tasks.hook(ida_events.HexRaysHooks(global_env.event_collector)),
-        api.get_api_client(global_env.plugin_config) as api_client,
-        anyio.create_task_group() as tg,
-    ):
-        await logger.get().ainfo("Starting")
+    model = await Model.create()
 
-        env = Env(
-            state_nodes=await ida_tasks.run(StateNodes),
-            binaries_api=BinariesApi(api_client),
-            events=global_env.events,
-            uploaded_revisions=Broadcast(RecordLatest()),
-            task_updates=Broadcast(),
-            status_summaries=Broadcast(RecordLatest()),
-            server_states=Broadcast(RecordLatest()),
-            check_addresses=Broadcast(),
+    plugin_config = await ida_tasks.run(configuration.read_configuration_sync)
+
+    task_context = TaskContext(
+        model=model,
+        copilot_model=CopilotModel(),
+        ida_events=global_context.ida_events,
+        binaries_api=BinariesApi(global_context.api_client),
+        user_api=UserApi(global_context.api_client),
+        plugin_config=plugin_config,
+        static_config=global_context.static_config,
+    )
+
+    if not await _should_work_on_db():
+        await messages.warn_binary_exceeds_max_size(
+            max_size_mb=_MAX_SUPPORTED_BINARY_SIZE_MB
         )
-
-        # For interactive use
-        global _last_env
-        _last_env = env
-
-        with env.use():
-            should_work_on_db = await _should_work_on_db(
-                global_env.plugin_config
-            )
-
-            tg.start_soon(status.summarize_task_updates)
-            tg.start_soon(
-                status.report_status_summary_at_status_bar,
-                status.ReportStatusSummaryOptions(
-                    is_plugin_enabled=should_work_on_db
-                ),
-            )
-
-            if should_work_on_db:
-                is_unregistered = (await state.try_get_binary_id()) is None
-                if is_unregistered:
-                    await _register_binary()
-                    tg.start_soon(_upload_original_files)
-
-                tg.start_soon(upload_revisions_task, _UPLOAD_OPTIONS)
-                tg.start_soon(clear_inferences_marks_task)
-                tg.start_soon(monitor_analysis)
-                tg.start_soon(poll_server_status_task)
-                tg.start_soon(poll_inferences_task)
-
-                await anyio.sleep(0.1)  # Let previous tasks start
-                tg.start_soon(track_changes_task)
-
-
-async def _should_work_on_db(
-    plugin_config: configuration.PluginConfiguration,
-) -> bool:
-    user_confirmation = await state.get_user_confirmation()
-
-    if user_confirmation is None and plugin_config.require_confirmation_per_db:
-        result = await ida_tasks.run_ui(
-            ida_kernwin.ask_form,
-            cleandoc("""
-                BUTTON YES ~Y~es
-                BUTTON CANCEL* ~S~kip
-                Run DecompAI?
-
-
-                Would you like DecompAI to run on this file?
-            """),
-        )
-        user_confirmation = result == ida_kernwin.ASKBTN_YES
-
-        await state.set_user_confirmation(user_confirmation)
-
-    # Note that user_confirmation can still be `None` for undecided here.
-    if user_confirmation == False:  # noqa: E712
-        return False
-
-    if await binary.get_size() >= _MAX_SUPPORTED_BINARY_SIZE_MB * 2**20:
-        await ida_tasks.run_ui(
-            ida_kernwin.warning,
-            "The demo version of DecompAI supports binaries up to "
-            f"{_MAX_SUPPORTED_BINARY_SIZE_MB}MB (full versions have no limit). "
-            "As this database exceeds the limit, DecompAI has been disabled for this session.",
-        )
-        return False
-
-    return True
-
-
-async def _register_binary():
-    env = Env.get()
-
-    existing_binary_id = await state.try_get_binary_id()
-    assert existing_binary_id is None
-
-    binary_path = await binary.get_binary_path()
-    post_body = PostBinaryBody(name=binary_path.name)
-
-    async with status.begin_task("registering") as task:
-        result = await api.retry_forever(
-            lambda: env.binaries_api.create_binary(post_body),
-            task=task,
-            description="Create binary",
-        )
-
-    await state.set_binary_id(result.binary_id)
-
-
-async def _upload_original_files():
-    env = Env.get()
-    binary_id = await state.get_binary_id()
-
-    try:
-        input_file = await binary.read_compressed_input_file()
-    except Exception as ex:
-        await logger.get().awarning("Error while reading original", exc_info=ex)
-        # Not critical for plugin.
         return
 
-    async with status.begin_task("local_work") as task:
-        while True:
+    with logger.open(log_path, plugin_config.log_level):
+        async with anyio.create_task_group() as tg:
+            for task_type in _TASKS:
+                tg.start_soon(
+                    task_type(task_context).run, name=task_type.__name__
+                )
+
             try:
-                await env.binaries_api.put_original_file(
-                    binary_id=binary_id,
-                    name=input_file.name,
-                    data=input_file.data,
-                )
-                break
-
-            except Exception as ex:
-                is_temporary = api.is_temporary_error(ex)
-
-                await logger.get().awarning(
-                    "Error while uploading original",
-                    exc_info=ex,
-                    name=input_file.name,
-                    size=len(input_file.data),
-                    is_temporary=is_temporary,
+                await _spawn_active_tasks(task_context)
+            except exceptiongroup.ExceptionGroup as ex:
+                handled, rest = ex.split(
+                    (ForbiddenException, UnauthorizedException)
                 )
 
-                if is_temporary:
-                    await task.set_warning()
-                    continue
+                if handled is not None:
+                    if handled.subgroup(ForbiddenException):
+                        await messages.warn_no_permission_for_binary()
+                    if ex.subgroup(UnauthorizedException):
+                        await messages.warn_bad_credentials_message()
 
-                else:
-                    # Not critical for plugin.
-                    break
+                if rest is not None:
+                    raise rest
+
+                # Just continue in disabled state.
+                model.runtime_status.disabled = True
+                model.notify_update()
 
 
-def _setup_interactive_env():
-    """
-    Only for use in console, to allow interacting with our code.
-    """
+async def _spawn_active_tasks(task_context: TaskContext):
+    async with anyio.create_task_group() as tg:
+        for task_type in _ACTIVE_TASKS:
+            tg.start_soon(task_type(task_context).run, name=task_type.__name__)
 
-    from decompai_ida.ida_tasks import _running_in_task
-    from decompai_ida.env import _current_env
 
-    _running_in_task.set(True)
-    _current_env.set(_last_env)
+async def _should_work_on_db() -> bool:
+    return (
+        await ida_tasks.run(binary.get_size_sync)
+    ) < _MAX_SUPPORTED_BINARY_SIZE_MB * 2**20

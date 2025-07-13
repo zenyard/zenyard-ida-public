@@ -17,8 +17,9 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 from typing import Any, ClassVar, Dict, List, Optional
+from typing_extensions import Annotated
 from typing import Optional, Set
 from typing_extensions import Self
 
@@ -27,7 +28,7 @@ class FunctionOverview(BaseModel):
     FunctionOverview
     """ # noqa: E501
     type: Optional[StrictStr] = 'function_overview'
-    address: StrictStr = Field(description="Represents a 64-bit address as a 16-character lowercase hexadecimal string.")
+    address: Annotated[str, Field(strict=True)]
     overview: StrictStr
     full_description: StrictStr
     __properties: ClassVar[List[str]] = ["type", "address", "overview", "full_description"]
@@ -40,6 +41,13 @@ class FunctionOverview(BaseModel):
 
         if value not in set(['function_overview']):
             raise ValueError("must be one of enum values ('function_overview')")
+        return value
+
+    @field_validator('address')
+    def address_validate_regular_expression(cls, value):
+        """Validates the regular expression"""
+        if not re.match(r"^[0-9a-f]{16}$", value):
+            raise ValueError(r"must validate the regular expression /^[0-9a-f]{16}$/")
         return value
 
     model_config = ConfigDict(
@@ -96,7 +104,7 @@ class FunctionOverview(BaseModel):
             "type": obj.get("type") if obj.get("type") is not None else 'function_overview',
             "address": obj.get("address"),
             "overview": obj.get("overview"),
-            "full_description": obj.get("full_description"),
+            "full_description": obj.get("full_description")
         })
         return _obj
 

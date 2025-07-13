@@ -19,6 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
+from decompai_client.models.binary_details import BinaryDetails
 from typing import Optional, Set
 from typing_extensions import Self
 
@@ -27,7 +28,8 @@ class PostBinaryBody(BaseModel):
     PostBinaryBody
     """ # noqa: E501
     name: Optional[StrictStr] = 'unknown'
-    __properties: ClassVar[List[str]] = ["name"]
+    details: Optional[BinaryDetails] = None
+    __properties: ClassVar[List[str]] = ["name", "details"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -68,6 +70,9 @@ class PostBinaryBody(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # override the default output from pydantic by calling `to_dict()` of details
+        if self.details:
+            _dict['details'] = self.details.to_dict()
         return _dict
 
     @classmethod
@@ -80,7 +85,8 @@ class PostBinaryBody(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "name": obj.get("name") if obj.get("name") is not None else 'unknown'
+            "name": obj.get("name") if obj.get("name") is not None else 'unknown',
+            "details": BinaryDetails.from_dict(obj["details"]) if obj.get("details") is not None else None
         })
         return _obj
 

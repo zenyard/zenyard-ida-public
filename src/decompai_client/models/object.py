@@ -18,12 +18,13 @@ import pprint
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError, field_validator
 from typing import Any, List, Optional
 from decompai_client.models.function import Function
+from decompai_client.models.global_variable import GlobalVariable
 from decompai_client.models.thunk import Thunk
 from pydantic import StrictStr, Field
 from typing import Union, List, Set, Optional, Dict
 from typing_extensions import Literal, Self
 
-OBJECT_ONE_OF_SCHEMAS = ["Function", "Thunk"]
+OBJECT_ONE_OF_SCHEMAS = ["Function", "GlobalVariable", "Thunk"]
 
 class Object(BaseModel):
     """
@@ -33,8 +34,10 @@ class Object(BaseModel):
     oneof_schema_1_validator: Optional[Function] = None
     # data type: Thunk
     oneof_schema_2_validator: Optional[Thunk] = None
-    actual_instance: Optional[Union[Function, Thunk]] = None
-    one_of_schemas: Set[str] = { "Function", "Thunk" }
+    # data type: GlobalVariable
+    oneof_schema_3_validator: Optional[GlobalVariable] = None
+    actual_instance: Optional[Union[Function, GlobalVariable, Thunk]] = None
+    one_of_schemas: Set[str] = { "Function", "GlobalVariable", "Thunk" }
 
     model_config = ConfigDict(
         validate_assignment=True,
@@ -70,12 +73,17 @@ class Object(BaseModel):
             error_messages.append(f"Error! Input type `{type(v)}` is not `Thunk`")
         else:
             match += 1
+        # validate data type: GlobalVariable
+        if not isinstance(v, GlobalVariable):
+            error_messages.append(f"Error! Input type `{type(v)}` is not `GlobalVariable`")
+        else:
+            match += 1
         if match > 1:
             # more than 1 match
-            raise ValueError("Multiple matches found when setting `actual_instance` in Object with oneOf schemas: Function, Thunk. Details: " + ", ".join(error_messages))
+            raise ValueError("Multiple matches found when setting `actual_instance` in Object with oneOf schemas: Function, GlobalVariable, Thunk. Details: " + ", ".join(error_messages))
         elif match == 0:
             # no match
-            raise ValueError("No match found when setting `actual_instance` in Object with oneOf schemas: Function, Thunk. Details: " + ", ".join(error_messages))
+            raise ValueError("No match found when setting `actual_instance` in Object with oneOf schemas: Function, GlobalVariable, Thunk. Details: " + ", ".join(error_messages))
         else:
             return v
 
@@ -102,13 +110,19 @@ class Object(BaseModel):
             match += 1
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
+        # deserialize data into GlobalVariable
+        try:
+            instance.actual_instance = GlobalVariable.from_json(json_str)
+            match += 1
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
 
         if match > 1:
             # more than 1 match
-            raise ValueError("Multiple matches found when deserializing the JSON string into Object with oneOf schemas: Function, Thunk. Details: " + ", ".join(error_messages))
+            raise ValueError("Multiple matches found when deserializing the JSON string into Object with oneOf schemas: Function, GlobalVariable, Thunk. Details: " + ", ".join(error_messages))
         elif match == 0:
             # no match
-            raise ValueError("No match found when deserializing the JSON string into Object with oneOf schemas: Function, Thunk. Details: " + ", ".join(error_messages))
+            raise ValueError("No match found when deserializing the JSON string into Object with oneOf schemas: Function, GlobalVariable, Thunk. Details: " + ", ".join(error_messages))
         else:
             return instance
 
@@ -122,7 +136,7 @@ class Object(BaseModel):
         else:
             return json.dumps(self.actual_instance)
 
-    def to_dict(self) -> Optional[Union[Dict[str, Any], Function, Thunk]]:
+    def to_dict(self) -> Optional[Union[Dict[str, Any], Function, GlobalVariable, Thunk]]:
         """Returns the dict representation of the actual instance"""
         if self.actual_instance is None:
             return None

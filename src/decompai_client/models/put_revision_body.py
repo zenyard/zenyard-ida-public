@@ -25,7 +25,7 @@ from typing_extensions import Self
 
 class PutRevisionBody(BaseModel):
     """
-    PutRevisionBody
+    Deprecated
     """ # noqa: E501
     objects: List[Object]
     analyze_dependents: Optional[StrictBool] = True

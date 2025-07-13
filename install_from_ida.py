@@ -16,7 +16,7 @@ from uuid import UUID, uuid4
 import ida_diskio
 import ida_kernwin
 
-API_URL = "https://api.zenyard.ai"
+API_URL = globals().get("ZENYARD_API_URL", "https://api.zenyard.ai")
 GIT_TOKEN = globals().get("GIT_TOKEN")
 INSTALL_LOCATION = (
     f"git+https://{GIT_TOKEN}@github.com/zenyard/decompai-ida-public.git"
@@ -59,7 +59,7 @@ def main():
         stop_running_plugin()
         run_in_ui(
             lambda: ida_kernwin.info(
-                "DecompAI was installed successfully, restart IDA to use it."
+                "Zenyard was installed successfully, restart IDA to use it."
             )
         )
 
@@ -69,8 +69,8 @@ def main():
 
 
 def check_prerequisites():
-    if sys.version_info < (3, 9):
-        raise Exception(f"Python 3.9 or higher required, got {sys.version}")
+    if sys.version_info < (3, 10):
+        raise Exception(f"Python 3.10 or higher required, got {sys.version}")
 
     ida_version = run_in_ui(ida_kernwin.get_kernel_version)
     ida_major = int(ida_version.split(".")[0])

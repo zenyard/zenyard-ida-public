@@ -1,12 +1,13 @@
 import typing as ty
 
+import anyio
 from anyio.abc import ObjectReceiveStream
 
 _T = ty.TypeVar("_T")
 
 
 async def wait_for_object_of_type(
-    receiver: ObjectReceiveStream, type_: type[_T]
+    receiver: ObjectReceiveStream[_T], *type_: type[_T]
 ) -> ty.Optional[_T]:
     async for item in receiver:
         if isinstance(item, type_):
@@ -20,3 +21,7 @@ async def collect(async_iterable: ty.AsyncIterable[_T]) -> list[_T]:
 async def consume(async_iterable: ty.AsyncIterable[None]):
     async for _ in async_iterable:
         pass
+
+
+async def wait_until_cancelled():
+    await anyio.Event().wait()

@@ -19,6 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 from typing import Any, ClassVar, Dict, List, Optional
+from typing_extensions import Annotated
 from typing import Optional, Set
 from typing_extensions import Self
 
@@ -27,7 +28,7 @@ class VariablesMapping(BaseModel):
     VariablesMapping
     """ # noqa: E501
     type: Optional[StrictStr] = 'variables'
-    address: StrictStr = Field(description="Represents a 64-bit address as a 16-character lowercase hexadecimal string.")
+    address: Annotated[str, Field(strict=True)]
     variables_mapping: Dict[str, StrictStr]
     __properties: ClassVar[List[str]] = ["type", "address", "variables_mapping"]
 
@@ -39,6 +40,13 @@ class VariablesMapping(BaseModel):
 
         if value not in set(['variables']):
             raise ValueError("must be one of enum values ('variables')")
+        return value
+
+    @field_validator('address')
+    def address_validate_regular_expression(cls, value):
+        """Validates the regular expression"""
+        if not re.match(r"^[0-9a-f]{16}$", value):
+            raise ValueError(r"must validate the regular expression /^[0-9a-f]{16}$/")
         return value
 
     model_config = ConfigDict(

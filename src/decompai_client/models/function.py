@@ -19,6 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr, field_validator
 from typing import Any, ClassVar, Dict, List, Optional
+from typing_extensions import Annotated
 from decompai_client.models.range import Range
 from typing import Optional, Set
 from typing_extensions import Self
@@ -27,15 +28,22 @@ class Function(BaseModel):
     """
     Function
     """ # noqa: E501
-    address: StrictStr = Field(description="Represents a 64-bit address as a 16-character lowercase hexadecimal string.")
+    address: Annotated[str, Field(strict=True)]
+    type: Optional[StrictStr] = 'function'
     name: StrictStr
     has_known_name: Optional[StrictBool] = False
     inference_seq_number: Optional[StrictInt] = 0
-    type: Optional[StrictStr] = 'function'
     code: StrictStr
-    ranges: Optional[List[Range]]
-    calls: List[StrictStr]
-    __properties: ClassVar[List[str]] = ["address", "name", "has_known_name", "inference_seq_number", "type", "code", "ranges", "calls"]
+    calls: List[Annotated[str, Field(strict=True)]]
+    ranges: Optional[List[Range]] = None
+    __properties: ClassVar[List[str]] = ["address", "type", "name", "has_known_name", "inference_seq_number", "code", "calls", "ranges"]
+
+    @field_validator('address')
+    def address_validate_regular_expression(cls, value):
+        """Validates the regular expression"""
+        if not re.match(r"^[0-9a-f]{16}$", value):
+            raise ValueError(r"must validate the regular expression /^[0-9a-f]{16}$/")
+        return value
 
     @field_validator('type')
     def type_validate_enum(cls, value):
@@ -93,11 +101,6 @@ class Function(BaseModel):
                 if _item_ranges:
                     _items.append(_item_ranges.to_dict())
             _dict['ranges'] = _items
-        # set to None if ranges (nullable) is None
-        # and model_fields_set contains the field
-        if self.ranges is None and "ranges" in self.model_fields_set:
-            _dict['ranges'] = None
-
         return _dict
 
     @classmethod
@@ -111,13 +114,13 @@ class Function(BaseModel):
 
         _obj = cls.model_validate({
             "address": obj.get("address"),
+            "type": obj.get("type") if obj.get("type") is not None else 'function',
             "name": obj.get("name"),
             "has_known_name": obj.get("has_known_name") if obj.get("has_known_name") is not None else False,
             "inference_seq_number": obj.get("inference_seq_number") if obj.get("inference_seq_number") is not None else 0,
-            "type": obj.get("type") if obj.get("type") is not None else 'function',
             "code": obj.get("code"),
-            "ranges": [Range.from_dict(_item) for _item in obj["ranges"]] if obj.get("ranges") is not None else None,
-            "calls": obj.get("calls")
+            "calls": obj.get("calls"),
+            "ranges": [Range.from_dict(_item) for _item in obj["ranges"]] if obj.get("ranges") is not None else None
         })
         return _obj
 

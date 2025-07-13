@@ -2,9 +2,9 @@
 Helpers to parse `ida_lines` format.
 """
 
-from dataclasses import dataclass
 import re
 import typing as ty
+from dataclasses import dataclass
 from itertools import groupby
 
 import ida_hexrays
@@ -15,17 +15,15 @@ from idaapi import BADADDR
 from more_itertools import before_and_after, peekable
 
 from decompai_client import AddressDetail, LVarDetail, Range, RangeDetail
-from decompai_ida import api, ida_tasks
+from decompai_ida import api
 
 _CFunc: tye.TypeAlias = ty.Union[ida_hexrays.cfunc_t, ida_hexrays.cfuncptr_t]
-_IDENTIFIER_PATTERN = re.compile(r"(?!\d)\w+")
 
 
-@ida_tasks.wrap_generator
-def get_ranges(func: _CFunc) -> ty.Iterator[Range]:
+def get_ranges_sync(func: _CFunc) -> ty.Iterator[Range]:
     current_line_index = 0
 
-    func_lines = _FuncLines.from_func_sync(func)  # type: ignore
+    func_lines = _FuncLines.from_func(func)  # type: ignore
     arg_names: set[str] = {lvar.name for lvar in func.lvars if lvar.is_arg_var}  # type: ignore
 
     for line in func_lines.comment:
@@ -37,7 +35,7 @@ def get_ranges(func: _CFunc) -> ty.Iterator[Range]:
         current_line_index += len(_strip_codes(line)) + 1
 
     for line in func_lines.body:
-        for range in _parse_ranges_sync(func, line):
+        for range in _parse_ranges(func, line):
             for narrowed_range in _narrow_range(line, range):
                 yield _offset_range(narrowed_range, current_line_index)
         current_line_index += len(_strip_codes(line)) + 1
@@ -51,14 +49,12 @@ def _offset_range(range: Range, offset: int) -> Range:
     )
 
 
-def _parse_ranges_sync(func: _CFunc, line: str) -> ty.Iterator[Range]:
-    ida_tasks.assert_running_in_task()
-
+def _parse_ranges(func: _CFunc, line: str) -> ty.Iterator[Range]:
     ctree_item = ida_hexrays.ctree_item_t()
 
     def pos_and_tags():
         pos = 0
-        for _, tag_text in _tags_sync(line):
+        for _, tag_text in _tags(line):
             yield pos, tag_text
             pos += len(tag_text)
 
@@ -71,7 +67,7 @@ def _parse_ranges_sync(func: _CFunc, line: str) -> ty.Iterator[Range]:
             ctree_item,
             None,  # type: ignore
         )
-        return _detail_from_ctree_item_sync(ctree_item)
+        return _detail_from_ctree_item(ctree_item)
 
     tags_and_details = (
         (pos, tag, detail_at(pos)) for pos, tag in pos_and_tags()
@@ -87,12 +83,10 @@ def _parse_ranges_sync(func: _CFunc, line: str) -> ty.Iterator[Range]:
 
 
 def _strip_codes(text: str) -> str:
-    return "".join(tag_text for _, tag_text in _tags_sync(text))
+    return "".join(tag_text for _, tag_text in _tags(text))
 
 
-def _tags_sync(text: str) -> ty.Iterable[tuple[str, str]]:
-    ida_tasks.assert_running_in_task()
-
+def _tags(text: str) -> ty.Iterable[tuple[str, str]]:
     i = 0
     while i < len(text):
         tag_length = ida_lines.tag_advance(text[i:], 1)
@@ -103,11 +97,9 @@ def _tags_sync(text: str) -> ty.Iterable[tuple[str, str]]:
         i += tag_length
 
 
-def _detail_from_ctree_item_sync(
+def _detail_from_ctree_item(
     ctree_item: ida_hexrays.ctree_item_t,
 ) -> ty.Optional[RangeDetail]:
-    ida_tasks.assert_running_in_task()
-
     address = ctree_item.get_ea()
     if address != BADADDR:
         return RangeDetail(AddressDetail(address=api.format_address(address)))
@@ -178,12 +170,10 @@ class _FuncLines:
     body: tuple[str, ...]
 
     @staticmethod
-    def from_func_sync(func: _CFunc) -> "_FuncLines":
-        ida_tasks.assert_running_in_task()
-
+    def from_func(func: _CFunc) -> "_FuncLines":
         def no_address(line: str) -> bool:
             return not any(
-                _ADDRESS_CODE in tag_codes for tag_codes, _ in _tags_sync(line)
+                _ADDRESS_CODE in tag_codes for tag_codes, _ in _tags(line)
             )
 
         def is_comment(line: str) -> bool:

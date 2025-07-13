@@ -19,6 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr, field_validator
 from typing import Any, ClassVar, Dict, List, Optional
+from typing_extensions import Annotated
 from typing import Optional, Set
 from typing_extensions import Self
 
@@ -26,13 +27,20 @@ class Thunk(BaseModel):
     """
     Thunk
     """ # noqa: E501
-    address: StrictStr = Field(description="Represents a 64-bit address as a 16-character lowercase hexadecimal string.")
+    address: Annotated[str, Field(strict=True)]
+    type: Optional[StrictStr] = 'thunk'
     name: StrictStr
     has_known_name: Optional[StrictBool] = False
     inference_seq_number: Optional[StrictInt] = 0
-    type: Optional[StrictStr] = 'thunk'
-    target: StrictStr = Field(description="Represents a 64-bit address as a 16-character lowercase hexadecimal string.")
-    __properties: ClassVar[List[str]] = ["address", "name", "has_known_name", "inference_seq_number", "type", "target"]
+    target: Annotated[str, Field(strict=True)]
+    __properties: ClassVar[List[str]] = ["address", "type", "name", "has_known_name", "inference_seq_number", "target"]
+
+    @field_validator('address')
+    def address_validate_regular_expression(cls, value):
+        """Validates the regular expression"""
+        if not re.match(r"^[0-9a-f]{16}$", value):
+            raise ValueError(r"must validate the regular expression /^[0-9a-f]{16}$/")
+        return value
 
     @field_validator('type')
     def type_validate_enum(cls, value):
@@ -42,6 +50,13 @@ class Thunk(BaseModel):
 
         if value not in set(['thunk']):
             raise ValueError("must be one of enum values ('thunk')")
+        return value
+
+    @field_validator('target')
+    def target_validate_regular_expression(cls, value):
+        """Validates the regular expression"""
+        if not re.match(r"^[0-9a-f]{16}$", value):
+            raise ValueError(r"must validate the regular expression /^[0-9a-f]{16}$/")
         return value
 
     model_config = ConfigDict(
@@ -96,10 +111,10 @@ class Thunk(BaseModel):
 
         _obj = cls.model_validate({
             "address": obj.get("address"),
+            "type": obj.get("type") if obj.get("type") is not None else 'thunk',
             "name": obj.get("name"),
             "has_known_name": obj.get("has_known_name") if obj.get("has_known_name") is not None else False,
             "inference_seq_number": obj.get("inference_seq_number") if obj.get("inference_seq_number") is not None else 0,
-            "type": obj.get("type") if obj.get("type") is not None else 'thunk',
             "target": obj.get("target")
         })
         return _obj

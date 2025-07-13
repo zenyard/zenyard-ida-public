@@ -1,7 +1,7 @@
 import typing as ty
 from collections import defaultdict
-from contextlib import contextmanager
 
+import ida_bytes
 import ida_funcs
 import ida_hexrays
 import ida_kernwin
@@ -9,90 +9,85 @@ import ida_name
 import idc
 import structlog
 import typing_extensions as tye
-from anyio import TASK_STATUS_IGNORED
-from anyio.abc import TaskStatus
 
 from decompai_client import (
     FunctionOverview,
-    Inference,
     Name,
     ParametersMapping,
     VariablesMapping,
 )
-from decompai_ida import api, ida_tasks, logger, markdown, objects, state
-from decompai_ida.env import Env
+from decompai_ida import api, logger, markdown
+from decompai_ida.events import block_ida_events
 from decompai_ida.lvars import (
-    apply_parameter_renames,
-    apply_variable_renames,
-    get_parameter_names,
-    get_variable_names,
+    apply_parameter_renames_sync,
+    apply_variable_renames_sync,
+    get_parameter_names_sync,
+    get_variable_names_sync,
 )
+from decompai_ida.model import Inference, Model
 
 
 def _rgb_to_int(r: int, g: int, b: int) -> int:
     return (b << 16) + (g << 8) + r
 
 
-_INFERRED_COLOR = _rgb_to_int(220, 202, 255)
+INFERRED_COLOR = _rgb_to_int(220, 202, 255)
 
 
-async def apply_inferences(inferences: ty.Iterable[Inference]):
+def apply_pending_inferences_sync(address: int, *, model: Model):
+    pending_inferences = list(model.pending_inferences.read_sync(address))
+    # Reverse the list to get oldest to newest.
+    pending_inferences = pending_inferences[::-1]
+    if len(pending_inferences) > 0:
+        _apply_inferences_for_address(address, pending_inferences, model=model)
+        model.pending_inferences.clear_address_sync(address)
+
+
+def apply_inferences_sync(inferences: ty.Iterable[Inference], *, model: Model):
     by_address = defaultdict[int, list[Inference]](list)
     for inference in inferences:
-        if inference.actual_instance is not None:
-            by_address[
-                api.parse_address(inference.actual_instance.address)
-            ].append(inference)
+        by_address[api.parse_address(inference.address)].append(inference)
 
-    await ida_tasks.for_each(
-        by_address.items(),
-        lambda item: _apply_inferences_for_address_sync(*item),
-    )
+    for address, inferences in by_address.items():
+        _apply_inferences_for_address(address, inferences, model=model)
 
 
-def _apply_inferences_for_address_sync(
-    address: int, inferences: ty.Collection[Inference]
+def _apply_inferences_for_address(
+    address: int,
+    inferences: ty.Collection[Inference],
+    *,
+    model: Model,
 ):
-    ida_tasks.assert_running_in_task()
-
     with (
         structlog.contextvars.bound_contextvars(address=address),
-        _maintain_uploaded_hash_sync(address),
+        block_ida_events(),
     ):
-        logger.get().debug("Applying inferences", count=len(inferences))
+        logger.debug("Applying inferences on address", count=len(inferences))
         for inference in inferences:
             try:
                 inference = _apply_local_transformations(inference)
-                assert inference.actual_instance is not None
-                assert (
-                    api.parse_address(inference.actual_instance.address)
-                    == address
-                )
+                assert api.parse_address(inference.address) == address
 
-                if isinstance(inference.actual_instance, FunctionOverview):
-                    _apply_overview_sync(inference.actual_instance)
-                elif isinstance(inference.actual_instance, Name):
-                    _apply_name_sync(inference.actual_instance)
-                elif isinstance(inference.actual_instance, ParametersMapping):
-                    _apply_parameters_sync(inference.actual_instance)
-                elif isinstance(inference.actual_instance, VariablesMapping):
-                    _apply_variables_sync(inference.actual_instance)
+                if isinstance(inference, FunctionOverview):
+                    _apply_overview(inference, model=model)
+                elif isinstance(inference, Name):
+                    _apply_name(inference, model=model)
+                elif isinstance(inference, ParametersMapping):
+                    _apply_parameters(inference, model=model)
+                elif isinstance(inference, VariablesMapping):
+                    _apply_variables(inference, model=model)
                 else:
-                    _: tye.Never = inference.actual_instance
+                    _: tye.Never = inference
 
-                state.add_inference_for_address.sync(address, inference)
+                model.inferences.push_sync(address, inference)
 
             except Exception as ex:
-                logger.get().warning(
-                    "Error while applying inferences", exc_info=ex
-                )
+                logger.warning("Error while applying inferences", exc_info=ex)
 
-    _update_pseudocode_viewer_for_address_sync(address)
+    _update_pseudocode_viewer_for_address(address)
 
 
-def _update_pseudocode_viewer_for_address_sync(address: int):
-    ida_tasks.assert_running_in_task()
-
+def _update_pseudocode_viewer_for_address(address: int):
     current_vdui = ida_hexrays.get_widget_vdui(ida_kernwin.get_current_viewer())
 
     if current_vdui is None:
@@ -110,36 +105,7 @@ def _update_pseudocode_viewer_for_address_sync(address: int):
     current_vdui.refresh_view(True)
 
 
-async def clear_inferences_marks_task(
-    *, task_status: TaskStatus[None] = TASK_STATUS_IGNORED
-):
-    env = Env.get()
-
-    async with env.check_addresses.subscribe() as check_addresses_receiver:
-        async for check_addresses in check_addresses_receiver:
-            await ida_tasks.for_each(
-                check_addresses.addresses, _clear_inferred_name_marks_sync
-            )
-
-
-def _clear_inferred_name_marks_sync(address: int):
-    ida_tasks.assert_running_in_task()
-
-    func = ida_funcs.get_func(address)
-    if func is None or address != func.start_ea:
-        return
-
-    if idc.get_color(address, idc.CIC_FUNC) != _INFERRED_COLOR:
-        return
-
-    if not has_user_defined_name.sync(address):
-        return
-
-    idc.set_color(address, idc.CIC_FUNC, idc.DEFCOLOR)
-
-
-@ida_tasks.wrap
-def has_user_defined_name(address: int) -> bool:
+def has_user_defined_name_sync(address: int, *, model: Model) -> bool:
     """
     Whether given address was named by user (i.e. not inferred or unnamed).
     """
@@ -149,16 +115,13 @@ def has_user_defined_name(address: int) -> bool:
         # Unnamed.
         return False
 
-    inferences = state.get_inferences_for_address.sync(address)
     return not any(
-        isinstance(inference.actual_instance, Name)
-        and inference.actual_instance.name in name
-        for inference in inferences
+        isinstance(inference, Name) and inference.name in name
+        for inference in model.inferences.read_sync(address)
     )
 
 
-@ida_tasks.wrap
-def has_user_defined_comment(address: int) -> bool:
+def has_user_defined_comment_sync(address: int, *, model: Model) -> bool:
     """
     Whether given address has function comment given by user.
     """
@@ -177,56 +140,48 @@ def has_user_defined_comment(address: int) -> bool:
     if len(comment) == 0:
         return False
 
-    inferences = state.get_inferences_for_address.sync(address)
     return not any(
-        isinstance(inference.actual_instance, FunctionOverview)
-        and inference.actual_instance.full_description.strip() == comment
-        for inference in inferences
+        isinstance(inference, FunctionOverview)
+        and inference.full_description.strip() == comment
+        for inference in model.inferences.read_sync(address)
     )
 
 
 T = ty.TypeVar("T")
 
 
-@ida_tasks.wrap
-def _get_last_inference_type_sync(
-    address: int, inference_type: ty.Type[T]
+def _get_last_inference_type(
+    address: int,
+    inference_type: ty.Type[T],
+    *,
+    model: Model,
 ) -> ty.Union[T, None]:
-    ida_tasks.assert_running_in_task()
-
-    inferences = state.get_inferences_for_address.sync(address)
     return next(
         (
-            inference.actual_instance
-            for inference in reversed(inferences)
-            if isinstance(inference.actual_instance, inference_type)
+            inference
+            for inference in model.inferences.read_sync(address)
+            if isinstance(inference, inference_type)
         ),
         None,
     )
 
 
 def _apply_local_transformations(inference: Inference) -> Inference:
-    if isinstance(inference.actual_instance, FunctionOverview):
-        overview = inference.actual_instance
-        return Inference(
-            overview.model_copy(
-                update={
-                    "full_description": markdown.format(
-                        overview.full_description
-                    )
-                }
-            )
+    if isinstance(inference, FunctionOverview):
+        overview = inference
+        return overview.model_copy(
+            update={
+                "full_description": markdown.format(overview.full_description)
+            }
         )
     else:
         return inference
 
 
-def _apply_overview_sync(overview: FunctionOverview):
-    ida_tasks.assert_running_in_task()
-
+def _apply_overview(overview: FunctionOverview, *, model: Model):
     address = api.parse_address(overview.address)
 
-    if has_user_defined_comment.sync(address):
+    if has_user_defined_comment_sync(address, model=model):
         return
 
     func = ida_funcs.get_func(address)
@@ -235,29 +190,34 @@ def _apply_overview_sync(overview: FunctionOverview):
     ida_funcs.set_func_cmt(func, overview.full_description, False)
 
 
-def _apply_name_sync(name: Name):
-    ida_tasks.assert_running_in_task()
-
+def _apply_name(name: Name, *, model: Model):
     address = api.parse_address(name.address)
 
-    if has_user_defined_name.sync(address):
+    if has_user_defined_name_sync(address, model=model):
         return
 
-    func = ida_funcs.get_func(address)
-    assert func is not None
-    is_thunk = bool(func.flags & ida_funcs.FUNC_THUNK)
+    # Add leading underscore to avoid reserved prefix (e.g. `byte_`).
+    name_to_apply = (
+        name.name if ida_name.is_uname(name.name) else f"_{name.name}"
+    )
 
-    if is_thunk:
-        # Let IDA manage names of thunks
-        return
+    address_flags = ida_bytes.get_full_flags(address)
+    if ida_bytes.is_data(address_flags) or ida_bytes.is_unknown(address_flags):
+        ida_name.set_name(address, name_to_apply, ida_name.SN_FORCE)
+    else:
+        func = ida_funcs.get_func(address)
+        assert func is not None
+        is_thunk = bool(func.flags & ida_funcs.FUNC_THUNK)
 
-    ida_name.set_name(address, name.name, ida_name.SN_FORCE)
-    idc.set_color(address, idc.CIC_FUNC, _INFERRED_COLOR)
+        if is_thunk:
+            # Let IDA manage names of thunks
+            return
+
+        ida_name.set_name(address, name_to_apply, ida_name.SN_FORCE)
+        idc.set_color(address, idc.CIC_FUNC, INFERRED_COLOR)
 
 
-def _apply_variables_sync(variables_mapping: VariablesMapping):
-    ida_tasks.assert_running_in_task()
-
+def _apply_variables(variables_mapping: VariablesMapping, *, model: Model):
     address = api.parse_address(variables_mapping.address)
     func = ida_funcs.get_func(address)
     assert func is not None
@@ -271,14 +231,14 @@ def _apply_variables_sync(variables_mapping: VariablesMapping):
     if decompiled is None:
         raise Exception(f"Can't decompile: {failure.desc()}")
 
-    variable_names = get_variable_names.sync(decompiled)
+    variable_names = get_variable_names_sync(decompiled)
     # TODO: Not sure if to use last or merge
-    last_variables_mapping = _get_last_inference_type_sync.sync(
-        address, VariablesMapping
+    last_variables_mapping = _get_last_inference_type(
+        address, VariablesMapping, model=model
     )
-    last_infered_variable_names = set()
+    last_inferred_variable_names = set()
     if last_variables_mapping is not None:
-        last_infered_variable_names = set(
+        last_inferred_variable_names = set(
             last_variables_mapping.variables_mapping.values()
         )
     variable_name_to_variable_name_obj = {
@@ -292,8 +252,8 @@ def _apply_variables_sync(variables_mapping: VariablesMapping):
         if variable_name is None:
             continue
         if not variable_name.is_dummy:
-            if variable_name.name in last_infered_variable_names:
-                # Only override user defined variables that were infered
+            if variable_name.name in last_inferred_variable_names:
+                # Only override user defined variables that were inferred
                 renames[original_variable_name] = (
                     variables_mapping.variables_mapping[original_variable_name]
                 )
@@ -302,21 +262,21 @@ def _apply_variables_sync(variables_mapping: VariablesMapping):
                 variables_mapping.variables_mapping[original_variable_name]
             )
 
-    apply_variable_renames.sync(decompiled, renames)
+    apply_variable_renames_sync(decompiled, renames)
 
 
-def _apply_parameters_sync(parameters_mapping: ParametersMapping):
-    ida_tasks.assert_running_in_task()
-
+def _apply_parameters(parameters_mapping: ParametersMapping, *, model: Model):
     address = api.parse_address(parameters_mapping.address)
-    parameter_names = get_parameter_names.sync(address)
+    parameter_names = get_parameter_names_sync(address)
     # TODO: Not sure if to use last or merge
-    last_parameters_mapping = _get_last_inference_type_sync.sync(
-        address, ParametersMapping
+    last_parameters_mapping = _get_last_inference_type(
+        address,
+        ParametersMapping,
+        model=model,
     )
-    last_infered_parameter_names = set()
+    last_inferred_parameter_names = set()
     if last_parameters_mapping is not None:
-        last_infered_parameter_names = set(
+        last_inferred_parameter_names = set(
             last_parameters_mapping.parameters_mapping.values()
         )
 
@@ -324,7 +284,7 @@ def _apply_parameters_sync(parameters_mapping: ParametersMapping):
     for parameter_index, parameter_name in enumerate(parameter_names):
         if (
             not parameter_name.is_dummy
-            and parameter_name.name not in last_infered_parameter_names
+            and parameter_name.name not in last_inferred_parameter_names
         ):
             # Skip user defined parameter names
             continue
@@ -333,67 +293,4 @@ def _apply_parameters_sync(parameters_mapping: ParametersMapping):
         )
         if new_name is not None:
             renames[parameter_index] = new_name
-    apply_parameter_renames.sync(address, renames)
-
-
-@contextmanager
-def _maintain_uploaded_hash_sync(address: int):
-    """
-    If object before changes is synced with server (according to hash),
-    update the hash once context exists.
-
-    This is for doing changes the we know the server emulates (i.e. applying
-    inferences), so the uploaded hash can reflect server's emulated state.
-    """
-    ida_tasks.assert_running_in_task()
-
-    was_clean = _is_object_known_to_be_clean_sync(address)
-
-    with structlog.contextvars.bound_contextvars(was_clean=was_clean):
-        try:
-            yield
-
-        finally:
-            if was_clean:
-                try:
-                    updated_hash = objects.hash_object.sync(
-                        objects.read_object.sync(address)
-                    )
-                    status = state.get_sync_status.sync(address)
-                    state.set_sync_status.sync(
-                        address, status.with_uploaded_hash(updated_hash)
-                    )
-                    logger.get().debug("Maintained hash")
-
-                except Exception as ex:
-                    logger.get().warning(
-                        "Error while maintaining hash", exc_info=ex
-                    )
-                    pass
-            else:
-                logger.get().debug("Not maintaining hash of dirty object")
-
-
-def _is_object_known_to_be_clean_sync(address: int) -> bool:
-    ida_tasks.assert_running_in_task()
-
-    try:
-        status = state.get_sync_status.sync(address)
-
-        # Avoid reading object if possible
-        if status.is_handled:
-            return True
-        if status.uploaded_hash is None:
-            return False
-
-        # Finally read object and compare hash
-        current_hash = objects.hash_object.sync(
-            objects.read_object.sync(address)
-        )
-        return current_hash == status.uploaded_hash
-
-    except Exception as ex:
-        logger.get().warning(
-            "Error while checking if object is clean", exc_info=ex
-        )
-        return False
+    apply_parameter_renames_sync(address, renames)

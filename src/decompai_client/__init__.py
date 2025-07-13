@@ -19,6 +19,7 @@ __version__ = "1.0.0"
 # import apis into sdk package
 from decompai_client.decompai_api.binaries_api import BinariesApi
 from decompai_client.decompai_api.default_api import DefaultApi
+from decompai_client.decompai_api.user_api import UserApi
 
 # import ApiClient
 from decompai_client.api_response import ApiResponse
@@ -32,13 +33,19 @@ from decompai_client.exceptions import ApiAttributeError
 from decompai_client.exceptions import ApiException
 
 # import models into sdk package
+from decompai_client.models.add_objects_to_current_revision_params import AddObjectsToCurrentRevisionParams
 from decompai_client.models.address_detail import AddressDetail
 from decompai_client.models.binary_analysis_idle import BinaryAnalysisIdle
 from decompai_client.models.binary_analysis_in_progress import BinaryAnalysisInProgress
+from decompai_client.models.binary_details import BinaryDetails
+from decompai_client.models.copilot_config import CopilotConfig
+from decompai_client.models.create_revision_params import CreateRevisionParams
+from decompai_client.models.finish_and_analyze_current_revision_params import FinishAndAnalyzeCurrentRevisionParams
 from decompai_client.models.function import Function
 from decompai_client.models.function_overview import FunctionOverview
 from decompai_client.models.get_binary_status_response import GetBinaryStatusResponse
 from decompai_client.models.get_inferences_response import GetInferencesResponse
+from decompai_client.models.global_variable import GlobalVariable
 from decompai_client.models.http_validation_error import HTTPValidationError
 from decompai_client.models.inference import Inference
 from decompai_client.models.l_var_detail import LVarDetail
@@ -52,6 +59,7 @@ from decompai_client.models.put_revision_body import PutRevisionBody
 from decompai_client.models.range import Range
 from decompai_client.models.range_detail import RangeDetail
 from decompai_client.models.thunk import Thunk
+from decompai_client.models.user_config import UserConfig
 from decompai_client.models.validation_error import ValidationError
 from decompai_client.models.validation_error_loc_inner import ValidationErrorLocInner
 from decompai_client.models.variables_mapping import VariablesMapping

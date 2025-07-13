@@ -1,69 +1,248 @@
 """
-Utilities for working with model objects.
+Defines the current state of the extension.
+
+All tasks store their state and communicate with others via the `Model` object.
 """
 
+import time
 import typing as ty
+from collections import deque
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 
-from decompai_client import Function, Range, RangeDetail
+import anyio
+import typing_extensions as tye
+from pydantic import BaseModel
+
+from decompai_client import (
+    Function,
+    FunctionOverview,
+    Name,
+    ParametersMapping,
+    Thunk,
+    VariablesMapping,
+    GlobalVariable,
+)
+from decompai_ida import ida_tasks, storage
+from decompai_ida.ida_tasks import AsyncCallback
+from decompai_ida.serialization import EncodedBytes
+from decompai_client.models.copilot_config import CopilotConfig
+
+if ty.TYPE_CHECKING:
+    from decompai_ida.tasks import ForegroundTask
+    from decompai_ida.ui.copilot import Message
 
 
-def transform_code(
-    func: Function,
-    callback: ty.Callable[[str, RangeDetail], str],
-) -> Function:
+# Similar to definitions of `Object` and `Inference` from API, but easier to
+# work with since they exclude `None`.
+
+Object: tye.TypeAlias = ty.Union[Function, Thunk, GlobalVariable]
+
+Inference: tye.TypeAlias = ty.Union[
+    FunctionOverview, Name, ParametersMapping, VariablesMapping
+]
+
+
+class SyncStatus(BaseModel, frozen=True):
     """
-    Transform ranges with details (address, lvars) using given callback.
-
-    Callback receives original text and details of each range, and returns
-    new text to replace original.
+    Attached to every address of object we sync with the server.
     """
 
-    transformed_ranges = list[Range]()
-    transformed_parts = list[str]()
-    current_start = 0
+    uploaded_hash: ty.Optional[EncodedBytes] = None
+    """
+    Hash of the uploaded object. `None` means not uploaded.
+    """
 
-    for part, range in _code_slices(func):
-        if range is not None:
-            transformed_part = callback(part, range.detail)
-            transformed_parts.append(transformed_part)
-            transformed_ranges.append(
-                Range(
-                    detail=range.detail,
-                    start=current_start,
-                    length=len(transformed_part),
-                )
-            )
-        else:
-            transformed_parts.append(part)
-        current_start += len(transformed_parts[-1])
+    dirty: bool = True
+    """
+    True if object is suspected to have been changed.
+    """
 
-    return Function(
-        address=func.address,
-        name=func.name,
-        has_known_name=func.has_known_name,
-        type=func.type,
-        code="".join(transformed_parts),
-        ranges=transformed_ranges,
-        calls=func.calls,
-        inference_seq_number=func.inference_seq_number,
+    def with_dirty(self, dirty: bool) -> "SyncStatus":
+        return SyncStatus(uploaded_hash=self.uploaded_hash, dirty=dirty)
+
+
+class Revision(BaseModel, frozen=True):
+    """
+    Revision to be uploaded.
+    """
+
+    objects: tuple[Object, ...]
+    is_initial_analysis: bool
+
+
+TaskName = ty.Literal[
+    "uploading", "downloading", "waiting_for_ida", "registering"
+]
+
+
+@dataclass(frozen=True)
+class RemoteAnalysisStats:
+    start_time: float
+    start_revision: float
+
+
+@dataclass
+class RuntimeStatus:
+    """
+    Current runtime (non-persistent) state.
+    """
+
+    active_tasks: set[TaskName] = field(default_factory=set)
+    apply_inferences_when_ready: bool = False
+    connection_failures: dict[str, float] = field(default_factory=dict)
+    initial_analysis_complete = False
+    foreground_task_queue: deque[type["ForegroundTask"]] = field(
+        default_factory=deque
     )
+    foreground_task_active: bool = False
+    ida_settled: bool = False
+    """
+    Whether IDA stopped doing modifications to the database.
+    """
+
+    disabled: bool = False
+    "Whether plugin is currently disabled"
+
+    remote_analysis_stats: ty.Optional[RemoteAnalysisStats] = None
+
+    def mark_connection_successful(self, name: str):
+        if name in self.connection_failures:
+            del self.connection_failures[name]
+
+    def mark_connection_failure(self, name: str):
+        if name not in self.connection_failures:
+            self.connection_failures[name] = time.monotonic()
+
+    def queue_foreground_task_if_not_already_queued(
+        self, new_task_type: type["ForegroundTask"]
+    ):
+        # Note - if tasks become parameterized, this should probably replace
+        # existing task.
+        if new_task_type not in self.foreground_task_queue:
+            self.foreground_task_queue.append(new_task_type)
 
 
-def _code_slices(
-    func: Function,
-) -> ty.Iterator[tuple[str, ty.Optional[Range]]]:
-    sorted_ranges = sorted(func.ranges or (), key=lambda r: r.start)
-    last_end = 0
+@dataclass
+class CopilotModel:
+    """
+    Model for copilot chat state and communication.
+    """
 
-    for r in sorted_ranges:
-        # Yield any uncovered slice before this range
-        if r.start > last_end:
-            yield func.code[last_end : r.start], None
+    configuration: ty.Optional[CopilotConfig] = None
+    messages: list["Message"] = field(default_factory=list)
+    is_active: bool = False
+    stop_requested: bool = False
+    clear_requested: bool = False
+    mcp_server_port: ty.Optional[int] = None
+    _updated: anyio.Event = field(init=False)
+    notify_update: AsyncCallback = field(init=False)
 
-        # Current range
-        yield func.code[r.start : r.start + r.length], r
-        last_end = r.start + r.length
+    def __post_init__(self):
+        self.notify_update = AsyncCallback(self._notify_update)
+        self._updated = anyio.Event()
 
-    # Yield any remaining slice after the last range
-    if last_end < len(func.code):
-        yield func.code[last_end:], None
+    async def wait_for_update(self):
+        """
+        Wait for update notification (via `notify_update`).
+        """
+        await self._updated.wait()
+
+    def _notify_update(self):
+        """
+        Wake all tasks waiting for update.
+        """
+        self._updated.set()
+        self._updated = anyio.Event()
+
+    async def wait_for_configuration(self):
+        while self.configuration is None:
+            await self.wait_for_update()
+
+
+class Model:
+    """
+    All extension state.
+    """
+
+    @staticmethod
+    async def create():
+        instance = Model()
+        await ida_tasks.run(instance._open_storages_sync)
+        return instance
+
+    def __init__(self):
+        "Use `create` instead"
+        self.notify_update = AsyncCallback(self._notify_update)
+        self.runtime_status = RuntimeStatus()
+        self._updated = anyio.Event()
+        self.copilot_model = CopilotModel()
+
+    def _open_storages_sync(self):
+        "Use `create`!"
+        self.binary_id = storage.SingleValue(
+            "binary_id", ty.Optional[str], default=None
+        )
+        self.initial_upload_complete = storage.SingleValue(
+            "initial_upload_complete", bool, default=False
+        )
+        self.initial_upload_suggested = storage.SingleValue(
+            "initial_upload_suggested", bool, default=False
+        )
+        self.original_files_uploaded = storage.SingleValue(
+            "original_files_uploaded", bool, default=False
+        )
+        self.database_dirty = storage.SingleValue(
+            "database_dirty", bool, default=True
+        )
+        self.revision = storage.SingleValue("revision", int, default=0)
+        self.inference_cursor: storage.SingleValue[ty.Optional[int]] = (
+            storage.SingleValue(
+                "inference_cursor", ty.Optional[int], default=None
+            )
+        )
+        self.server_revision = storage.SingleValue(
+            "server_revision", float, default=0.0
+        )
+        self.last_done_revision = storage.SingleValue(
+            "last_done_revision", float, default=0.0
+        )
+        self.sync_status = storage.AddressMap("sync_status", SyncStatus)
+        self.inferences = storage.AddressMultiMap("inferences", Inference)
+        self.pending_inferences = storage.AddressMultiMap(
+            "pending_inferences", Inference
+        )
+        self.revision_queue = storage.Queue("revision_queue", Revision)
+        self.inference_queue = storage.Queue("inference_queue", Inference)
+        self.tid_to_object = storage.AddressRelation("tid_to_object")
+
+    def _notify_update(self) -> None:
+        """
+        Wake all tasks waiting for update.
+        """
+        self._updated.set()
+        self._updated = anyio.Event()
+
+    async def wait_for_update(self):
+        """
+        Wait for update notification (via `notify_update`).
+        """
+        await self._updated.wait()
+
+    @contextmanager
+    def report_and_notify_background_task(self, background_task: TaskName):
+        self.runtime_status.active_tasks.add(background_task)
+        self.notify_update()
+        try:
+            yield
+        finally:
+            self.runtime_status.active_tasks.remove(background_task)
+            self.notify_update()
+
+    async def wait_for_initial_analysis(self):
+        while not self.runtime_status.initial_analysis_complete:
+            await self.wait_for_update()
+
+    async def wait_for_registration(self):
+        while (await self.binary_id.get()) is None:
+            await self.wait_for_update()

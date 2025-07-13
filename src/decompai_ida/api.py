@@ -1,33 +1,30 @@
 import typing as ty
 from asyncio.exceptions import TimeoutError
+from contextlib import asynccontextmanager
 
-import anyio
-import typing_extensions as tye
 from aiohttp.client_exceptions import ClientConnectionError
 
-from decompai_client import (
-    ApiClient,
-)
+from decompai_client import ApiClient
 from decompai_client import (
     Configuration as ApiConfiguration,
 )
 from decompai_client.exceptions import ServiceException
-from decompai_ida import status, logger
-from decompai_ida.configuration import PluginConfiguration
-
-_RETRY_DELAY = 3
-
-_T = ty.TypeVar("_T")
-_P = tye.ParamSpec("_P")
+from decompai_ida import configuration, ida_tasks
 
 
-def get_api_client(plugin_config: PluginConfiguration) -> ApiClient:
-    return ApiClient(
-        ApiConfiguration(
-            host=str(plugin_config.api_url).rstrip("/"),
-            api_key={"APIKeyHeader": plugin_config.api_key},
-        )
+@asynccontextmanager
+async def open_api_client() -> ty.AsyncIterator[ApiClient]:
+    plugin_config = await ida_tasks.run(configuration.read_configuration_sync)
+
+    client_config = ApiConfiguration(
+        host=str(plugin_config.api_url).rstrip("/"),
+        api_key={"APIKeyHeader": plugin_config.api_key},
     )
+
+    client_config.verify_ssl = plugin_config.verify_ssl
+
+    async with ApiClient(client_config) as api_client:
+        yield api_client
 
 
 def is_temporary_error(error: Exception):
@@ -37,33 +34,6 @@ def is_temporary_error(error: Exception):
     return isinstance(
         error, (ClientConnectionError, ServiceException, TimeoutError)
     )
-
-
-async def retry_forever(
-    func: ty.Callable[[], ty.Awaitable[_T]],
-    *,
-    task: status.Task,
-    description: str,
-) -> _T:
-    while True:
-        try:
-            result = await func()
-            await task.clear_warning()
-            return result
-        except Exception as ex:
-            is_temporary = is_temporary_error(ex)
-            await logger.get().awarning(
-                "Error from API",
-                is_temporary=is_temporary,
-                description=description,
-                exc_info=ex,
-            )
-
-            if is_temporary:
-                await task.set_warning()
-                await anyio.sleep(_RETRY_DELAY)
-            else:
-                raise
 
 
 def parse_address(api_address: str) -> int:

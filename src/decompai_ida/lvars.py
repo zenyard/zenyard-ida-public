@@ -10,8 +10,6 @@ import ida_nalt
 import ida_typeinf
 import typing_extensions as tye
 
-from decompai_ida import ida_tasks
-
 
 @dataclass(frozen=True)
 class Name:
@@ -22,8 +20,7 @@ class Name:
     "Is this a dummy name (e.g. `a1`, `v1`)."
 
 
-@ida_tasks.wrap
-def get_parameter_names(address: int) -> list[Name]:
+def get_parameter_names_sync(address: int) -> list[Name]:
     func_type_data = _get_func_type_data(address)
 
     return [
@@ -35,8 +32,7 @@ def get_parameter_names(address: int) -> list[Name]:
     ]
 
 
-@ida_tasks.wrap
-def apply_parameter_renames(address: int, renames: ty.Mapping[int, str]):
+def apply_parameter_renames_sync(address: int, renames: ty.Mapping[int, str]):
     if len(renames) == 0:
         return
 
@@ -57,8 +53,7 @@ def apply_parameter_renames(address: int, renames: ty.Mapping[int, str]):
 _CFunc: tye.TypeAlias = ty.Union[ida_hexrays.cfunc_t, ida_hexrays.cfuncptr_t]
 
 
-@ida_tasks.wrap
-def get_variable_names(func: _CFunc) -> list[Name]:
+def get_variable_names_sync(func: _CFunc) -> list[Name]:
     user_lvar_settings = ida_hexrays.lvar_uservec_t()
     ida_hexrays.restore_user_lvar_settings(user_lvar_settings, func.entry_ea)  # type: ignore
     named_lvars = {
@@ -72,8 +67,7 @@ def get_variable_names(func: _CFunc) -> list[Name]:
     ]
 
 
-@ida_tasks.wrap
-def apply_variable_renames(func: _CFunc, renames: ty.Mapping[str, str]):
+def apply_variable_renames_sync(func: _CFunc, renames: ty.Mapping[str, str]):
     address = func.entry_ea  # type: ignore
     user_lvar_settings = ida_hexrays.lvar_uservec_t()
     ida_hexrays.restore_user_lvar_settings(user_lvar_settings, address)

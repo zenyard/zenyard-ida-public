@@ -1,79 +1,27 @@
 import importlib.resources
-import typing as ty
-from contextlib import asynccontextmanager
-from dataclasses import dataclass
 
-import anyio
-import typing_extensions as tye
-from PyQt5.QtCore import Qt
+from PyQt5 import QtGui
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
-    QApplication,
-    QGraphicsColorizeEffect,
     QHBoxLayout,
     QLabel,
-    QMainWindow,
     QProgressBar,
-    QStatusBar,
     QWidget,
 )
 
-from decompai_ida import assets, ida_tasks
-
-_current_widget: ty.Optional["_StatusBarWidget"] = None
-"Current widget in status bar, only present to allow interactive access"
+from decompai_ida import assets
+from decompai_ida.ui.status_bar_view_model import StatusBarViewModel
 
 
-@dataclass(frozen=True)
-class StatusBarWidgetState:
-    text: str
-    progress: ty.Union[ty.Literal["started"], ty.Optional[int]] = None
-    warning: ty.Optional[str] = None
-    enabled: bool = True
+class StatusBarWidget(QWidget):
+    save_results_clicked = pyqtSignal()
+    upload_clicked = pyqtSignal()
 
-
-@asynccontextmanager
-async def status_bar_widget() -> ty.AsyncIterator["StatusBarWidgetProxy"]:
-    """
-    Context manager adding widget to status bar, yielding an object to update
-    it from async code.
-    """
-
-    global _current_widget
-
-    @ida_tasks.wrap(ui_only=True)
-    def setup():
-        ida_tasks.assert_running_in_task()
-
-        status_bar = _find_status_bar_sync()
-        widget = _StatusBarWidget()
-        status_bar.addPermanentWidget(widget)
-        return status_bar, widget
-
-    status_bar, widget = await setup()
-
-    try:
-        _current_widget = widget
-        yield StatusBarWidgetProxy(widget)
-    finally:
-        _current_widget = None
-        with anyio.CancelScope(shield=True):
-            await ida_tasks.run_ui(status_bar.removeWidget, widget)
-
-
-class StatusBarWidgetProxy:
-    def __init__(self, widget: "_StatusBarWidget"):
-        self._widget = widget
-
-    async def set_state(self, state: StatusBarWidgetState):
-        await ida_tasks.run_ui(self._widget.set_state, state)
-
-
-class _StatusBarWidget(QWidget):
-    def __init__(self):
+    def __init__(self, view_model: StatusBarViewModel):
         super().__init__()
 
-        self.setFixedWidth(320)
+        self.setFixedWidth(430)
 
         # HBoxLayout
         self._hbox = QHBoxLayout()
@@ -82,14 +30,31 @@ class _StatusBarWidget(QWidget):
         self._hbox.setSpacing(4)
 
         # Zenyard icon
-        self._grey_icon_effect = QGraphicsColorizeEffect()
-        self._grey_icon_effect.setColor(Qt.gray)
         self._icon = QLabel()
         self._hbox.addWidget(self._icon)
         self._icon.setPixmap(_load_icon("zenyard_icon.png"))
         self._icon.setFixedSize(18, 18)
         self._icon.setScaledContents(True)
-        self._icon.setGraphicsEffect(self._grey_icon_effect)
+
+        # Upload icon
+        self._upload_icon = _ClickableLabel()
+        self._hbox.addWidget(self._upload_icon)
+        self._upload_icon.setPixmap(_load_icon("upload_icon.png"))
+        self._upload_icon.setFixedSize(18, 18)
+        self._upload_icon.setScaledContents(True)
+        self._upload_icon.setVisible(False)
+        self._upload_icon.clicked.connect(self.upload_clicked)
+        view_model.upload_available.connect(self._upload_icon.setVisible)
+
+        # Save results icon
+        self._save_results_icon = _ClickableLabel()
+        self._hbox.addWidget(self._save_results_icon)
+        self._save_results_icon.setPixmap(_load_icon("save_results_icon.png"))
+        self._save_results_icon.setFixedSize(18, 18)
+        self._save_results_icon.setScaledContents(True)
+        self._save_results_icon.setVisible(False)
+        self._save_results_icon.clicked.connect(self.save_results_clicked)
+        view_model.results_available.connect(self._save_results_icon.setVisible)
 
         # Warning icon
         self._warning_icon = QLabel()
@@ -97,58 +62,46 @@ class _StatusBarWidget(QWidget):
         self._warning_icon.setPixmap(_load_icon("warning_icon.png"))
         self._warning_icon.setFixedSize(18, 18)
         self._warning_icon.setScaledContents(True)
+        self._warning_icon.setToolTip("Can't reach server")
+        self._warning_icon.setVisible(False)
+        view_model.disconnected_icon_visible.connect(
+            self._warning_icon.setVisible
+        )
 
         # Label
-        self._label = QLabel()
+        self._label = _ClickableLabel()
         self._hbox.addWidget(self._label)
         self._label.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         )
+        self._label.clicked.connect(self._on_label_click)
+        self._label.setText("Starting")
+        view_model.status_line.connect(self._label.setText)
 
         # Progress bar
         self._progress_bar = QProgressBar()
         self._hbox.addWidget(self._progress_bar)
         self._progress_bar.setFixedSize(100, 18)
+        self._progress_bar.setVisible(False)
+        view_model.progress_bar_visible.connect(self._progress_bar.setVisible)
+        view_model.progress_bar_range.connect(self._progress_bar.setRange)
+        view_model.progress_bar_value.connect(self._progress_bar.setValue)
 
-        self.set_state(StatusBarWidgetState(text=""))
+    def _on_label_click(self) -> None:
+        if self._save_results_icon.isVisible():
+            self.save_results_clicked.emit()
+        elif self._upload_icon.isVisible():
+            self.upload_clicked.emit()
 
-    def set_state(self, state: StatusBarWidgetState):
-        self._label.setText(state.text)
 
-        if state.enabled:
-            self._grey_icon_effect.setStrength(0.0)
-        else:
-            self._grey_icon_effect.setStrength(0.7)
+class _ClickableLabel(QLabel):
+    clicked = pyqtSignal()
 
-        if state.warning is not None:
-            self._warning_icon.setVisible(True)
-            self._warning_icon.setToolTip(state.warning)
-        else:
-            self._warning_icon.setVisible(False)
-
-        if state.progress == "started":
-            self._progress_bar.setVisible(True)
-            self._progress_bar.setRange(0, 0)
-            self._progress_bar.setValue(0)
-        elif isinstance(state.progress, int):
-            self._progress_bar.setVisible(True)
-            self._progress_bar.setRange(0, 100)
-            self._progress_bar.setValue(state.progress)
-        elif state.progress is None:
-            self._progress_bar.setVisible(False)
-        else:
-            _: tye.Never = state.progress
+    def mousePressEvent(self, ev: QtGui.QMouseEvent) -> None:
+        if ev.button() == Qt.LeftButton:
+            self.clicked.emit()
 
 
 def _load_icon(file_name: str) -> QPixmap:
     with importlib.resources.path(assets, file_name) as file_path:
         return QPixmap(str(file_path))
-
-
-def _find_status_bar_sync() -> QStatusBar:
-    ida_tasks.assert_running_in_task()
-
-    for widget in QApplication.topLevelWidgets():
-        if isinstance(widget, QMainWindow):
-            return widget.statusBar()
-    raise Exception("Can't find status bar")

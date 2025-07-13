@@ -1,29 +1,72 @@
-from contextlib import asynccontextmanager
+import contextvars
+import logging
+import typing as ty
+from contextlib import contextmanager
 from functools import wraps
 from io import StringIO
 from pathlib import Path
-import typing as ty
+
 import exceptiongroup
-from structlog.typing import ExcInfo
-import typing_extensions as tye
 import structlog
-import contextvars
-import logging
+import typing_extensions as tye
+from structlog.typing import ExcInfo
 
 
-@asynccontextmanager
-async def open(log_path: Path, level: ty.Optional[ty.Union[str, int]]):
+# Short-hand functions
+def bind(**kw: ty.Any) -> structlog.stdlib.BoundLogger:
+    return get().bind(**kw)
+
+
+def debug(event: str, *args: ty.Any, **kw: ty.Any):
+    get().debug(event, *args, **kw)
+
+
+def info(event: str, *args: ty.Any, **kw: ty.Any):
+    get().info(event, *args, **kw)
+
+
+def warning(event: str, *args: ty.Any, **kw: ty.Any):
+    get().warning(event, *args, **kw)
+
+
+def error(event: str, *args: ty.Any, **kw: ty.Any):
+    get().error(event, *args, **kw)
+
+
+async def adebug(event: str, *args: ty.Any, **kw: ty.Any):
+    await get().adebug(event, *args, **kw)
+
+
+async def ainfo(event: str, *args: ty.Any, **kw: ty.Any):
+    await get().ainfo(event, *args, **kw)
+
+
+async def awarning(event: str, *args: ty.Any, **kw: ty.Any):
+    await get().awarning(event, *args, **kw)
+
+
+async def aerror(event: str, *args: ty.Any, **kw: ty.Any):
+    await get().aerror(event, *args, **kw)
+
+
+@contextmanager
+def open(log_path: Path, level: ty.Optional[ty.Union[str, int]]):
     if level is None:
         yield
         return
 
-    with log_path.open("a") as log_file:
-        logger = _create_logger(log_file, level)
-        token = _CURRENT_LOGGER.set(logger)
-        try:
-            yield
-        finally:
-            _CURRENT_LOGGER.reset(token)
+    with log_path.open("a") as log_file, open_to_stream(log_file, level):
+        yield
+
+
+@contextmanager
+def open_to_stream(output: ty.Optional[ty.TextIO], level: ty.Union[str, int]):
+    logger = _create_logger(output, level)
+    token = _CURRENT_LOGGER.set(logger)
+    try:
+        yield
+    finally:
+        _CURRENT_LOGGER.reset(token)
 
 
 _R = ty.TypeVar("_R", covariant=True)
@@ -33,7 +76,8 @@ _P = tye.ParamSpec("_P")
 def instrument(
     **log_kwargs,
 ) -> ty.Callable[
-    [ty.Callable[_P, ty.Awaitable[_R]]], ty.Callable[_P, ty.Awaitable[_R]]
+    [ty.Callable[_P, ty.Awaitable[_R]]],
+    ty.Callable[_P, ty.Coroutine[None, None, _R]],
 ]:
     def decorator(func):
         @wraps(func)
