@@ -7,8 +7,9 @@ from PyQt5.QtCore import pyqtSignal
 from decompai_ida import logger
 import ida_kernwin
 import ida_name
+import idautils
 import idaapi
-import html
+from textwrap import dedent
 
 from decompai_ida import assets
 from decompai_ida.ida_tasks import AsyncCallback
@@ -52,12 +53,12 @@ class CopilotStyles:
 
     USER_TEXT_INPUT = "QTextEdit { border: none; }"
 
-    MESSAGE_HTML_TEMPLATE = """
-        <div style="margin: 0">
-            <b>{sender}</b>
-            <p style="margin-left: {margin_left}px; margin-top: {margin_top}px; white-space: pre-wrap">{text}</p>
-        </div>
-    """
+    MESSAGE_HTML_TEMPLATE = dedent("""
+    <span style="color: #5C45A0"><b>{sender}</b></span>
+                                   
+    {text}
+    
+    """)
 
     SEND_BUTTON_SEND = "➤"
     SEND_BUTTON_STOP = "■"
@@ -137,28 +138,9 @@ class ChatDisplay(QtWidgets.QTextEdit):
     def mouseDoubleClickEvent(self, e):
         """Handle double-click events to navigate to symbols in IDA."""
         try:
-            line_cursor = self.cursorForPosition(e.pos())
-            line_cursor.select(QtGui.QTextCursor.LineUnderCursor)
-            word_cursor = self.cursorForPosition(e.pos())
-            word_cursor.select(QtGui.QTextCursor.WordUnderCursor)
-            selected_line = line_cursor.selectedText()
-            cursor_offset = (
-                word_cursor.position() - line_cursor.selectionStart()
-            )
-
-            symbol_start_offset = max(
-                0, selected_line.rfind(" ", 0, cursor_offset) + 1
-            )
-            symbol_end_line_offset = selected_line.find(" ", cursor_offset)
-            selected_symbol = (
-                selected_line[symbol_start_offset:symbol_end_line_offset]
-                if symbol_end_line_offset != -1
-                else selected_line[symbol_start_offset:]
-            )
-            self.setTextCursor(self.cursorForPosition(e.pos()))
-
-            selected_symbol = selected_symbol.lstrip("[(`\"'").rstrip(
-                "]():`\"'"
+            cursor = self.cursorForPosition(e.pos())
+            selected_symbol = ida_name.extract_name(
+                cursor.block().text(), cursor.positionInBlock()
             )
             if selected_symbol:
                 self._jump_to_symbol(selected_symbol)
@@ -178,7 +160,11 @@ class ChatDisplay(QtWidgets.QTextEdit):
                     ida_kernwin.jumpto(ea)
                     logger.debug(f"Navigated to symbol: {symbol} at {hex(ea)}")
                 else:
-                    logger.debug(f"Symbol not found: {symbol}")
+                    ea = _find_demangled_symbol_ea(symbol)
+                    if ea is not None:
+                        ida_kernwin.jumpto(ea)
+                    else:
+                        logger.debug(f"Symbol not found: {symbol}")
         except Exception as e:
             logger.debug(f"Failed to navigate to symbol {symbol}: {e}")
 
@@ -191,7 +177,7 @@ class ChatDisplay(QtWidgets.QTextEdit):
                         sender=_get_message_sender(message),
                         margin_left=MESSAGE_MARGIN_LEFT,
                         margin_top=MESSAGE_MARGIN_TOP,
-                        text=html.escape(message.text),
+                        text=message.text,
                     )
                     for message in messages
                 ]
@@ -206,7 +192,7 @@ class ChatDisplay(QtWidgets.QTextEdit):
             # TODO: Qt sometimes loses a scroll to the bottom
             if scroll.maximum() - scroll.value() < SCROLL_TO_BOTTOM_THRESHOLD:
                 should_scroll_to_bottom = True
-            self.setHtml(html_content)
+            self.setMarkdown(html_content)
             if should_scroll_to_bottom:
                 self.moveCursor(QtGui.QTextCursor.End)
             else:
@@ -214,6 +200,16 @@ class ChatDisplay(QtWidgets.QTextEdit):
         except Exception as e:
             logger.error(f"Failed to update chat messages: {e}")
             self.setPlainText("Error displaying messages")
+
+
+def _find_demangled_symbol_ea(symbol: str) -> ty.Optional[int]:
+    for func_ea in idautils.Functions():
+        if symbol == ida_name.get_demangled_name(
+            func_ea,
+            ida_name.MNG_NODEFINIT,  # type: ignore
+            0,
+        ):
+            return func_ea
 
 
 def _get_message_sender(message: Message) -> str:
