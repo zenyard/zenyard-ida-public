@@ -20,13 +20,13 @@ from decompai_client import (
     Name,
     ParametersMapping,
     Thunk,
+    UserConfig,
     VariablesMapping,
     GlobalVariable,
 )
 from decompai_ida import ida_tasks, storage
 from decompai_ida.ida_tasks import AsyncCallback
 from decompai_ida.serialization import EncodedBytes
-from decompai_client.models.copilot_config import CopilotConfig
 
 if ty.TYPE_CHECKING:
     from decompai_ida.tasks import ForegroundTask
@@ -88,6 +88,7 @@ class RuntimeStatus:
     Current runtime (non-persistent) state.
     """
 
+    user_config: ty.Optional[UserConfig] = None
     active_tasks: set[TaskName] = field(default_factory=set)
     apply_inferences_when_ready: bool = False
     connection_failures: dict[str, float] = field(default_factory=dict)
@@ -129,7 +130,6 @@ class CopilotModel:
     Model for copilot chat state and communication.
     """
 
-    configuration: ty.Optional[CopilotConfig] = None
     messages: list["Message"] = field(default_factory=list)
     is_active: bool = False
     stop_requested: bool = False
@@ -154,10 +154,6 @@ class CopilotModel:
         """
         self._updated.set()
         self._updated = anyio.Event()
-
-    async def wait_for_configuration(self):
-        while self.configuration is None:
-            await self.wait_for_update()
 
 
 class Model:
@@ -246,3 +242,8 @@ class Model:
     async def wait_for_registration(self):
         while (await self.binary_id.get()) is None:
             await self.wait_for_update()
+
+    async def wait_for_user_config(self) -> UserConfig:
+        while self.runtime_status.user_config is None:
+            await self.wait_for_update()
+        return self.runtime_status.user_config

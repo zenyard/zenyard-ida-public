@@ -318,7 +318,9 @@ def _paginate_results(
 
 class CopilotMCPServerTask(Task):
     async def _run(self) -> None:
-        await self._ctx.copilot_model.wait_for_configuration()
+        user_config = await self._ctx.model.wait_for_user_config()
+        if user_config.copilot is None:
+            return
 
         mcp = FastMCP("zenyard-mcp", log_level="ERROR")
 

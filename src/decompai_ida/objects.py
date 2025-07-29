@@ -11,7 +11,7 @@ import ida_search
 import ida_segment
 import idautils
 from idaapi import BADADDR
-from more_itertools import ilen, take
+from more_itertools import ilen, pairwise, take
 
 from decompai_client import AddressDetail, RangeDetail
 from decompai_client.models import Function, Thunk, GlobalVariable
@@ -99,7 +99,7 @@ def read_object_sync(
         has_known_name = inferences.has_user_defined_name_sync(
             address, model=model
         )
-        return GlobalVariable(
+        result = GlobalVariable(
             address=api.format_address(address),
             name=name,
             has_known_name=has_known_name,
@@ -135,7 +135,7 @@ def read_object_sync(
                     exc_info=ex,
                 )
 
-            return Thunk(
+            result = Thunk(
                 address=api.format_address(address),
                 name=name,
                 target=api.format_address(target),
@@ -153,7 +153,7 @@ def read_object_sync(
                 address, model=model
             )
 
-            return Function(
+            result = Function(
                 address=api.format_address(address),
                 name=name,
                 code=str(decompiled),
@@ -162,6 +162,9 @@ def read_object_sync(
                 ranges=list(lines.get_ranges_sync(decompiled)),
                 inference_seq_number=inference_seq_number,
             )
+
+    validate_object(result)
+    return result
 
 
 def _decompile(
@@ -293,3 +296,26 @@ def _is_object_address(address: int) -> bool:
         return False
 
     return True
+
+
+def validate_object(obj: Object):
+    """
+    Throws `ValueError` if object is not valid.
+    """
+    if isinstance(obj, Function):
+        _validate_function(obj)
+
+
+def _validate_function(func: Function):
+    ranges = func.ranges or ()
+    # Validate ranges are within code bounds
+    if any(r.start < 0 or r.start + r.length > len(func.code) for r in ranges):
+        raise ValueError("Range out of code bounds")
+
+    # Validate ranges do not overlap
+    sorted_ranges = sorted(ranges, key=lambda r: r.start)
+    if any(
+        range2.start < range1.start + range1.length
+        for range1, range2 in pairwise(sorted_ranges)
+    ):
+        raise ValueError("Overlapping ranges")

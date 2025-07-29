@@ -48,7 +48,9 @@ class CopilotUiTask(Task):
 
     async def _run(self) -> None:
         """Main task execution - set up UI components and handle model updates."""
-        await self._ctx.copilot_model.wait_for_configuration()
+        user_config = await self._ctx.model.wait_for_user_config()
+        if user_config.copilot is None:
+            return
 
         # Create view model
         self._view_model = CopilotViewModel(self._ctx.copilot_model)

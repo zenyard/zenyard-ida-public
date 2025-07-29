@@ -41,6 +41,10 @@ class TriggerInitialUploadTask(Task):
     """
 
     async def _run(self):
+        # Wait for registration to ensure user and binary are allowed before
+        # showing anything to user.
+        await self._ctx.model.wait_for_registration()
+
         if await self._ctx.model.initial_upload_complete.get():
             await logger.get().adebug(
                 "Not suggesting initial upload - already uploaded"

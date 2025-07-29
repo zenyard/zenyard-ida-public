@@ -1,11 +1,14 @@
 import ida_kernwin
 
-from decompai_client import (
-    BinaryDetails,
-    PostBinaryBody,
-)
+from decompai_client import BinaryDetails, PostBinaryBody
 from decompai_ida import binary, ida_tasks, logger
 from decompai_ida.tasks import Task
+
+
+class BinaryExceedsSizeLimitError(Exception):
+    def __init__(self, *, max_binary_size_mb: int) -> None:
+        super().__init__("Binary exceeds size limit")
+        self.max_binary_size_mb = max_binary_size_mb
 
 
 class RegisterBinaryTask(Task):
@@ -15,6 +18,8 @@ class RegisterBinaryTask(Task):
             return
 
         await logger.adebug("Registering binary")
+        await self._verify_binary_allowed()
+
         binary_path = await ida_tasks.run(binary.get_binary_path_sync)
 
         if self._ctx.plugin_config.ask_for_binary_instructions:
@@ -42,3 +47,12 @@ class RegisterBinaryTask(Task):
         )
         await self._ctx.model.binary_id.set(result.binary_id)
         self._ctx.model.notify_update()
+
+    async def _verify_binary_allowed(self):
+        user_config = await self._ctx.model.wait_for_user_config()
+        assert user_config.max_binary_size_mb is not None
+        binary_bytes = await ida_tasks.run(binary.get_size_sync)
+        if binary_bytes > user_config.max_binary_size_mb * 2**20:
+            raise BinaryExceedsSizeLimitError(
+                max_binary_size_mb=user_config.max_binary_size_mb
+            )

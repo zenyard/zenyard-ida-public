@@ -84,15 +84,9 @@ class CopilotTask(Task):
         super().__init__(task_context)
 
     async def _run(self) -> None:
-        user_config = await self._retry_api_request_forever(
-            lambda: self._ctx.user_api.get_user_config(),
-            description="Get Copilot configuration",
-        )
-        if user_config is None or user_config.copilot is None:
+        user_config = await self._ctx.model.wait_for_user_config()
+        if user_config.copilot is None:
             return
-        self._ctx.copilot_model.configuration = user_config.copilot
-        self._ctx.copilot_model.notify_update()
-
         await self._run_copilot(user_config.copilot)
 
     async def _run_copilot(self, copilot_config: CopilotConfig) -> None:

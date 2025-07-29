@@ -33,13 +33,17 @@ from decompai_ida.events import (
     EventRecorder,
     IdaEvent,
 )
+from decompai_ida.fetch_user_config_task import FetchUserConfigTask
 from decompai_ida.maintain_tid_to_object_task import MaintainTidToObjectTask
 from decompai_ida.model import CopilotModel, Model
 from decompai_ida.monitor_initial_analysis_task import (
     MonitorInitialAnalysisTask,
 )
 from decompai_ida.poll_server_status_task import PollServerStatusTask
-from decompai_ida.register_binary_task import RegisterBinaryTask
+from decompai_ida.register_binary_task import (
+    BinaryExceedsSizeLimitError,
+    RegisterBinaryTask,
+)
 from decompai_ida.show_initial_upload_message_task import (
     ShowInitialUploadMessageTask,
 )
@@ -62,8 +66,6 @@ from decompai_ida.ui.copilot_ui_task import CopilotUiTask
 from decompai_ida.upload_original_files_task import UploadOriginalFilesTask
 from decompai_ida.upload_revisions_task import UploadRevisionsTask
 
-_MAX_SUPPORTED_BINARY_SIZE_MB = 10
-
 _STATIC_CONFIG = StaticConfiguration(
     max_objects_in_revision=512,
     max_upload_bytes=2 * 1024 * 1024,
@@ -74,6 +76,7 @@ _GLOBAL_TASKS: ty.Collection[type[GlobalTask]] = (BroadcastIdaEventsTask,)
 
 # Tasks that run when a DB is open (inactive or active).
 _TASKS: ty.Collection[type[Task]] = (
+    ApplyPendingInferencesTask,
     BroadcastHexRaysEventsTask,
     ClearInferenceMarksTask,
     MaintainTidToObjectTask,
@@ -85,7 +88,6 @@ _TASKS: ty.Collection[type[Task]] = (
 
 # Tasks that run when a DB is open and plugin is active.
 _ACTIVE_TASKS: ty.Collection[type[Task]] = (
-    ApplyPendingInferencesTask,
     DownloadInferencesTask,
     MonitorInitialAnalysisTask,
     PollServerStatusTask,
@@ -98,6 +100,7 @@ _ACTIVE_TASKS: ty.Collection[type[Task]] = (
     UploadRevisionsTask,
     CopilotTask,
     CopilotMCPServerTask,
+    FetchUserConfigTask,
 )
 
 _stop: ty.Callable[[bool], None] = lambda _: None  # noqa: E731
@@ -196,12 +199,6 @@ async def _spawn_tasks(global_context: GlobalTaskContext):
         static_config=global_context.static_config,
     )
 
-    if not await _should_work_on_db():
-        await messages.warn_binary_exceeds_max_size(
-            max_size_mb=_MAX_SUPPORTED_BINARY_SIZE_MB
-        )
-        return
-
     with logger.open(log_path, plugin_config.log_level):
         async with anyio.create_task_group() as tg:
             for task_type in _TASKS:
@@ -213,14 +210,24 @@ async def _spawn_tasks(global_context: GlobalTaskContext):
                 await _spawn_active_tasks(task_context)
             except exceptiongroup.ExceptionGroup as ex:
                 handled, rest = ex.split(
-                    (ForbiddenException, UnauthorizedException)
+                    (
+                        ForbiddenException,
+                        UnauthorizedException,
+                        BinaryExceedsSizeLimitError,
+                    )
                 )
 
                 if handled is not None:
-                    if handled.subgroup(ForbiddenException):
+                    if _extract_exception(handled, ForbiddenException):
                         await messages.warn_no_permission_for_binary()
-                    if ex.subgroup(UnauthorizedException):
+                    if _extract_exception(handled, UnauthorizedException):
                         await messages.warn_bad_credentials_message()
+                    if size_error := _extract_exception(
+                        handled, BinaryExceedsSizeLimitError
+                    ):
+                        await messages.warn_binary_exceeds_max_size(
+                            max_size_mb=size_error.max_binary_size_mb
+                        )
 
                 if rest is not None:
                     raise rest
@@ -236,7 +243,20 @@ async def _spawn_active_tasks(task_context: TaskContext):
             tg.start_soon(task_type(task_context).run, name=task_type.__name__)
 
 
-async def _should_work_on_db() -> bool:
-    return (
-        await ida_tasks.run(binary.get_size_sync)
-    ) < _MAX_SUPPORTED_BINARY_SIZE_MB * 2**20
+_E = ty.TypeVar("_E", bound=Exception)
+
+
+def _extract_exception(
+    group: exceptiongroup.ExceptionGroup, ex_type: type[_E]
+) -> ty.Optional[_E]:
+    subgroup = group.subgroup(ex_type)
+    if subgroup is None:
+        return
+
+    for item in subgroup.exceptions:
+        if isinstance(item, exceptiongroup.ExceptionGroup):
+            extracted = _extract_exception(item, ex_type)
+            if extracted is not None:
+                return extracted
+        else:
+            return item

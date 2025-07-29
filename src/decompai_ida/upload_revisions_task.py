@@ -1,5 +1,8 @@
 import typing as ty
 
+import structlog
+
+
 from decompai_client import (
     AddObjectsToCurrentRevisionParams,
     CreateRevisionParams,
@@ -8,6 +11,7 @@ from decompai_client import (
 )
 from decompai_ida import ida_tasks, logger
 from decompai_ida.model import Object
+from decompai_ida.objects import validate_object
 from decompai_ida.tasks import Task
 
 
@@ -39,58 +43,60 @@ class UploadRevisionsTask(Task):
         next_revision = (await self._ctx.model.revision.get()) + 1
         analyze_dependents = not revision.is_initial_analysis
 
-        log = logger.bind(
+        with structlog.contextvars.bound_contextvars(
             revision=next_revision,
             analyze_dependents=analyze_dependents,
             object_count=len(revision.objects),
-        )
-        await log.adebug("Uploading revision")
-
-        await self._retry_api_request_forever(
-            lambda: self._ctx.binaries_api.create_revision(
-                binary_id=binary_id,
-                create_revision_params=CreateRevisionParams(
-                    number=next_revision
-                ),
-            ),
-            description=f"Create revision {next_revision}",
-        )
-
-        for i, chunk in enumerate(
-            self._split_to_uploadable_chunks(revision.objects)
         ):
-            await log.adebug(
-                "Uploading chunk", objects_in_chunk=len(chunk), chunk_index=i
-            )
+            await logger.adebug("Uploading revision")
+
             await self._retry_api_request_forever(
-                lambda: self._ctx.binaries_api.add_objects_to_current_revision(
+                lambda: self._ctx.binaries_api.create_revision(
                     binary_id=binary_id,
-                    add_objects_to_current_revision_params=AddObjectsToCurrentRevisionParams(
-                        objects=chunk,
+                    create_revision_params=CreateRevisionParams(
+                        number=next_revision
                     ),
                 ),
-                description=(
-                    f"Upload chunk #{i+1} with {len(chunk)} objects to revision {next_revision}"
-                ),
+                description=f"Create revision {next_revision}",
             )
 
-        await log.adebug("Finishing revision")
-        await self._retry_api_request_forever(
-            lambda: self._ctx.binaries_api.finish_and_analyze_current_revision(
-                binary_id=binary_id,
-                finish_and_analyze_current_revision_params=FinishAndAnalyzeCurrentRevisionParams(
-                    analyze_dependents=analyze_dependents,
+            valid_objects = await _drop_invalid_objects(revision.objects)
+            chunks = self._split_to_uploadable_chunks(valid_objects)
+            for i, chunk in enumerate(chunks):
+                await logger.adebug(
+                    "Uploading chunk",
+                    objects_in_chunk=len(chunk),
+                    chunk_index=i,
+                )
+                await self._retry_api_request_forever(
+                    lambda: self._ctx.binaries_api.add_objects_to_current_revision(
+                        binary_id=binary_id,
+                        add_objects_to_current_revision_params=AddObjectsToCurrentRevisionParams(
+                            objects=chunk,
+                        ),
+                    ),
+                    description=(
+                        f"Upload chunk #{i+1} with {len(chunk)} objects to revision {next_revision}"
+                    ),
+                )
+
+            await logger.adebug("Finishing revision")
+            await self._retry_api_request_forever(
+                lambda: self._ctx.binaries_api.finish_and_analyze_current_revision(
+                    binary_id=binary_id,
+                    finish_and_analyze_current_revision_params=FinishAndAnalyzeCurrentRevisionParams(
+                        analyze_dependents=analyze_dependents,
+                    ),
                 ),
-            ),
-            description=f"Finish revision {next_revision}",
-        )
+                description=f"Finish revision {next_revision}",
+            )
 
-        # Update queue and current revision together to avoid showing wrong
-        # state in UI for a moment.
-        await ida_tasks.run(self._update_revision_atomically_sync)
-        self._ctx.model.notify_update()
+            # Update queue and current revision together to avoid showing wrong
+            # state in UI for a moment.
+            await ida_tasks.run(self._update_revision_atomically_sync)
+            self._ctx.model.notify_update()
 
-        await log.ainfo("Uploaded revision")
+            await logger.ainfo("Uploaded revision")
 
     async def _wait_for_revision(self):
         while (await self._ctx.model.revision_queue.size()) == 0:
@@ -124,3 +130,18 @@ class UploadRevisionsTask(Task):
 
         if len(current_chunk) > 0:
             yield current_chunk
+
+
+async def _drop_invalid_objects(
+    objects: ty.Iterable[Object],
+) -> ty.Sequence[Object]:
+    results = list[Object]()
+    for obj in objects:
+        try:
+            validate_object(obj)
+            results.append(obj)
+        except Exception as ex:
+            await logger.awarning(
+                "Dropping invalid object", address=obj.address, exc_info=ex
+            )
+    return results

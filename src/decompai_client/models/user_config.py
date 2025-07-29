@@ -17,7 +17,7 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, StrictInt
 from typing import Any, ClassVar, Dict, List, Optional
 from decompai_client.models.copilot_config import CopilotConfig
 from typing import Optional, Set
@@ -28,7 +28,8 @@ class UserConfig(BaseModel):
     UserConfig
     """ # noqa: E501
     copilot: Optional[CopilotConfig] = None
-    __properties: ClassVar[List[str]] = ["copilot"]
+    max_binary_size_mb: Optional[StrictInt] = 10
+    __properties: ClassVar[List[str]] = ["copilot", "max_binary_size_mb"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -89,7 +90,8 @@ class UserConfig(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "copilot": CopilotConfig.from_dict(obj["copilot"]) if obj.get("copilot") is not None else None
+            "copilot": CopilotConfig.from_dict(obj["copilot"]) if obj.get("copilot") is not None else None,
+            "max_binary_size_mb": obj.get("max_binary_size_mb") if obj.get("max_binary_size_mb") is not None else 10
         })
         return _obj
 
