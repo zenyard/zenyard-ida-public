@@ -59,15 +59,10 @@ def all_object_symbols_sync() -> ty.Iterator[Symbol]:
     # Get all global variables with references from code
     current_address = 0
     while (
-        next_eas := (
-            ida_search.find_data(current_address, ida_search.SEARCH_DOWN),
-            ida_search.find_unknown(current_address, ida_search.SEARCH_DOWN),
+        current_address := (
+            ida_search.find_data(current_address, ida_search.SEARCH_DOWN)
         )
-    ) != (
-        BADADDR,
-        BADADDR,
-    ):  # Continue while at least one data or unknown is found
-        current_address = min(addr for addr in next_eas if addr != BADADDR)
+    ) != BADADDR:
         name = ida_name.get_name(current_address)
         # TODO: Currently after first inference, a global variable is no longer uploaded
         if not ida_name.is_uname(name) and any(
