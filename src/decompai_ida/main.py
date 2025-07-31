@@ -34,7 +34,6 @@ from decompai_ida.events import (
     IdaEvent,
 )
 from decompai_ida.fetch_user_config_task import FetchUserConfigTask
-from decompai_ida.maintain_tid_to_object_task import MaintainTidToObjectTask
 from decompai_ida.model import CopilotModel, Model
 from decompai_ida.monitor_initial_analysis_task import (
     MonitorInitialAnalysisTask,
@@ -79,11 +78,11 @@ _TASKS: ty.Collection[type[Task]] = (
     ApplyPendingInferencesTask,
     BroadcastHexRaysEventsTask,
     ClearInferenceMarksTask,
-    MaintainTidToObjectTask,
     TrackChangesTask,
     TrackIdaSettledTask,
     UiTask,
     CopilotUiTask,
+    # TODO: Restore MaintainTidToObjectTask once we resolve crashes
 )
 
 # Tasks that run when a DB is open and plugin is active.
