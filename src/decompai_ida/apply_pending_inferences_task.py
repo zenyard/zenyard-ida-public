@@ -1,6 +1,7 @@
 import ida_hexrays
+import ida_kernwin
 
-from decompai_ida import ida_tasks, inferences
+from decompai_ida import ida_tasks, inferences, logger
 from decompai_ida.async_utils import wait_until_cancelled
 from decompai_ida.model import Model
 from decompai_ida.tasks import Task
@@ -26,12 +27,31 @@ class _ApplyPendingInferencesHooks(ida_hexrays.Hexrays_Hooks):
         # recursion loop.
 
         address = cfunc.entry_ea
-        if address not in self._currently_handling:
+        if (
+            address not in self._currently_handling
+            and self._has_pending_inferences(address)
+        ):
             self._currently_handling.add(address)
-            try:
-                inferences.apply_pending_inferences_sync(
-                    cfunc.entry_ea, model=self._model
-                )
-            finally:
-                self._currently_handling.remove(address)
+            ida_kernwin.execute_sync(
+                lambda: self._apply_for_address(address),
+                ida_kernwin.MFF_WRITE | ida_kernwin.MFF_NOWAIT,
+            )
         return super().func_printed(cfunc)
+
+    def _apply_for_address(self, address: int):
+        try:
+            inferences.apply_pending_inferences_sync(address, model=self._model)
+        except Exception as ex:
+            logger.warning(
+                "Error while applying pending inferences",
+                address=address,
+                exc_info=ex,
+            )
+        finally:
+            self._currently_handling.remove(address)
+
+    def _has_pending_inferences(self, address: int) -> bool:
+        return (
+            next(iter(self._model.pending_inferences.read_sync(address)), None)
+            is not None
+        )
