@@ -17,20 +17,18 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt
-from typing import Any, ClassVar, Dict, List, Optional
-from decompai_client.models.copilot_config import CopilotConfig
+from pydantic import BaseModel, ConfigDict
+from typing import Any, ClassVar, Dict, List
+from decompai_client.models.revision_analysis_status import RevisionAnalysisStatus
 from typing import Optional, Set
 from typing_extensions import Self
 
-class UserConfig(BaseModel):
+class BinaryStatus(BaseModel):
     """
-    UserConfig
+    BinaryStatus
     """ # noqa: E501
-    copilot: Optional[CopilotConfig] = None
-    max_binary_size_mb: Optional[StrictInt] = 10
-    swiftglow_enabled: Optional[StrictBool] = False
-    __properties: ClassVar[List[str]] = ["copilot", "max_binary_size_mb", "swiftglow_enabled"]
+    revision_analyses: List[RevisionAnalysisStatus]
+    __properties: ClassVar[List[str]] = ["revision_analyses"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -50,7 +48,7 @@ class UserConfig(BaseModel):
 
     @classmethod
     def from_json(cls, json_str: str) -> Optional[Self]:
-        """Create an instance of UserConfig from a JSON string"""
+        """Create an instance of BinaryStatus from a JSON string"""
         return cls.from_dict(json.loads(json_str))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -71,19 +69,18 @@ class UserConfig(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
-        # override the default output from pydantic by calling `to_dict()` of copilot
-        if self.copilot:
-            _dict['copilot'] = self.copilot.to_dict()
-        # set to None if copilot (nullable) is None
-        # and model_fields_set contains the field
-        if self.copilot is None and "copilot" in self.model_fields_set:
-            _dict['copilot'] = None
-
+        # override the default output from pydantic by calling `to_dict()` of each item in revision_analyses (list)
+        _items = []
+        if self.revision_analyses:
+            for _item_revision_analyses in self.revision_analyses:
+                if _item_revision_analyses:
+                    _items.append(_item_revision_analyses.to_dict())
+            _dict['revision_analyses'] = _items
         return _dict
 
     @classmethod
     def from_dict(cls, obj: Optional[Dict[str, Any]]) -> Optional[Self]:
-        """Create an instance of UserConfig from a dict"""
+        """Create an instance of BinaryStatus from a dict"""
         if obj is None:
             return None
 
@@ -91,9 +88,7 @@ class UserConfig(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "copilot": CopilotConfig.from_dict(obj["copilot"]) if obj.get("copilot") is not None else None,
-            "max_binary_size_mb": obj.get("max_binary_size_mb") if obj.get("max_binary_size_mb") is not None else 10,
-            "swiftglow_enabled": obj.get("swiftglow_enabled") if obj.get("swiftglow_enabled") is not None else False
+            "revision_analyses": [RevisionAnalysisStatus.from_dict(_item) for _item in obj["revision_analyses"]] if obj.get("revision_analyses") is not None else None
         })
         return _obj
 

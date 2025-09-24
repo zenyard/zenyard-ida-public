@@ -13,6 +13,7 @@ import contextvars
 import typing as ty
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+import threading
 
 import anyio
 import ida_kernwin
@@ -22,6 +23,13 @@ from decompai_ida import logger
 
 _R = ty.TypeVar("_R", covariant=True)
 _P = tye.ParamSpec("_P")
+
+# Keeps queued tasks, allowing to manually execute them using
+# `execute_queued_tasks_sync`.
+# The dict is used as queue allowing fast removals. Note that insertion order
+# is guaranteed since Python 3.7.
+_queued_tasks_lock = threading.Lock()
+_queued_tasks = dict[ty.Callable, None]()
 
 
 async def run(
@@ -41,6 +49,38 @@ async def run_ui(
     return await _run_in_main(
         lambda: func(*args, **kwargs), flags=ida_kernwin.MFF_FAST
     )
+
+
+def execute_queued_tasks_sync():
+    """
+    Immediately execute all tasks queued using `run` or `run_ui`.
+
+    This must be done in context of IDA's main thread, with `MFF_WRITE` flag.
+    It can be used periodically during long running foreground operations to
+    unblock background tasks.
+    """
+    global _queued_tasks
+
+    with _queued_tasks_lock:
+        taken_tasks = _queued_tasks
+        _queued_tasks = {}
+
+    for queud_task in taken_tasks:
+        try:
+            queud_task()
+        except Exception as ex:
+            logger.warning("Queued task failed", exc_info=ex)
+
+
+def _queue_task(func: ty.Callable):
+    with _queued_tasks_lock:
+        _queued_tasks[func] = None
+
+
+def _remove_from_queue(func: ty.Callable):
+    with _queued_tasks_lock:
+        if func in _queued_tasks:
+            del _queued_tasks[func]
 
 
 @dataclass
@@ -68,9 +108,14 @@ async def _run_in_main(
     context = contextvars.copy_context()
 
     def perform():
-        nonlocal output
+        nonlocal output, cancelled
         if cancelled:
             return
+
+        # Avoid re-running
+        cancelled = True
+        _remove_from_queue(perform)
+
         try:
             output = _Success(context.run(func))
         except Exception as ex:
@@ -78,6 +123,7 @@ async def _run_in_main(
         finally:
             set_done()
 
+    _queue_task(perform)
     _execute_sync(perform, flags | ida_kernwin.MFF_NOWAIT)
     try:
         await done.wait()
@@ -159,15 +205,50 @@ async def install_hooks(hooks: _Hooks):
     try:
         yield
     finally:
-        success = await run_ui(hooks.unhook)
-        if not success:
-            raise Exception(f"Unhooking {hooks} failed")
-        if hooks in _all_hooks:
-            _all_hooks.remove(hooks)
-        await log.ainfo("Hooks uninstalled")
+        with anyio.CancelScope(shield=True):
+            success = await run_ui(hooks.unhook)
+            if not success:
+                raise Exception(f"Unhooking {hooks} failed")
+            if hooks in _all_hooks:
+                _all_hooks.remove(hooks)
+            await log.ainfo("Hooks uninstalled")
 
 
 def unhook_all_sync():
     for hooks in _all_hooks:
         hooks.unhook()
     _all_hooks.clear()
+
+
+@asynccontextmanager
+async def install_action(
+    action_id: str,
+    label: str,
+    handler: ida_kernwin.action_handler_t,
+    shortcut: ty.Optional[str] = None,
+    tooltip: ty.Optional[str] = None,
+    icon: int = -1,
+    flags: int = 0,
+):
+    log = logger.bind(action_id=action_id)
+    action_desc = ida_kernwin.action_desc_t(
+        action_id,
+        label,
+        handler,
+        shortcut,  # type: ignore
+        tooltip,  # type: ignore
+        icon,
+        flags,
+    )
+    success = await run_ui(ida_kernwin.register_action, action_desc)
+    if not success:
+        raise Exception(f"Registering action {action_id} failed")
+    await log.ainfo("Action installed")
+    try:
+        yield
+    finally:
+        with anyio.CancelScope(shield=True):
+            success = await run_ui(ida_kernwin.unregister_action, action_id)
+            if not success:
+                raise Exception(f"Unregistering action {action_id} failed")
+            await log.ainfo("Action uninstalled")

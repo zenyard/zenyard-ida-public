@@ -5,7 +5,7 @@ import ida_kernwin
 from more_itertools import partition
 
 from decompai_client import VariablesMapping
-from decompai_ida import api, inferences, logger
+from decompai_ida import api, ida_tasks, inferences, logger
 from decompai_ida.model import Inference
 from decompai_ida.tasks import ForegroundTask
 
@@ -65,9 +65,12 @@ class ApplyInferencesTask(ForegroundTask):
             self._ctx.model.inference_queue.pop_sync(_BATCH_SIZE)
             self._wait_box.mark_items_complete(len(batch))
             self._ctx.model.notify_update()
+            ida_tasks.execute_queued_tasks_sync()
 
         # Update visible decompiled code, in case it has pending inferences.
         _update_pseudocode_viewer()
+        # Update functions chooser for colorization
+        ida_kernwin.refresh_chooser("Functions")
 
 
 def _update_pseudocode_viewer():

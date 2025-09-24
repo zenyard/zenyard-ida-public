@@ -20,6 +20,8 @@ import json
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr, field_validator
 from typing import Any, ClassVar, Dict, List, Optional
 from typing_extensions import Annotated
+from decompai_client.models.decompiler_note import DecompilerNote
+from decompai_client.models.line_range import LineRange
 from decompai_client.models.range import Range
 from typing import Optional, Set
 from typing_extensions import Self
@@ -35,8 +37,11 @@ class Function(BaseModel):
     inference_seq_number: Optional[StrictInt] = 0
     code: StrictStr
     calls: List[Annotated[str, Field(strict=True)]]
+    mangled_name: Optional[StrictStr] = None
     ranges: Optional[List[Range]] = None
-    __properties: ClassVar[List[str]] = ["address", "type", "name", "has_known_name", "inference_seq_number", "code", "calls", "ranges"]
+    line_ranges: Optional[List[LineRange]] = None
+    decompiler_notes: Optional[List[DecompilerNote]] = None
+    __properties: ClassVar[List[str]] = ["address", "type", "name", "has_known_name", "inference_seq_number", "code", "calls", "mangled_name", "ranges", "line_ranges", "decompiler_notes"]
 
     @field_validator('address')
     def address_validate_regular_expression(cls, value):
@@ -101,6 +106,30 @@ class Function(BaseModel):
                 if _item_ranges:
                     _items.append(_item_ranges.to_dict())
             _dict['ranges'] = _items
+        # override the default output from pydantic by calling `to_dict()` of each item in line_ranges (list)
+        _items = []
+        if self.line_ranges:
+            for _item_line_ranges in self.line_ranges:
+                if _item_line_ranges:
+                    _items.append(_item_line_ranges.to_dict())
+            _dict['line_ranges'] = _items
+        # override the default output from pydantic by calling `to_dict()` of each item in decompiler_notes (list)
+        _items = []
+        if self.decompiler_notes:
+            for _item_decompiler_notes in self.decompiler_notes:
+                if _item_decompiler_notes:
+                    _items.append(_item_decompiler_notes.to_dict())
+            _dict['decompiler_notes'] = _items
+        # set to None if mangled_name (nullable) is None
+        # and model_fields_set contains the field
+        if self.mangled_name is None and "mangled_name" in self.model_fields_set:
+            _dict['mangled_name'] = None
+
+        # set to None if line_ranges (nullable) is None
+        # and model_fields_set contains the field
+        if self.line_ranges is None and "line_ranges" in self.model_fields_set:
+            _dict['line_ranges'] = None
+
         return _dict
 
     @classmethod
@@ -120,7 +149,10 @@ class Function(BaseModel):
             "inference_seq_number": obj.get("inference_seq_number") if obj.get("inference_seq_number") is not None else 0,
             "code": obj.get("code"),
             "calls": obj.get("calls"),
-            "ranges": [Range.from_dict(_item) for _item in obj["ranges"]] if obj.get("ranges") is not None else None
+            "mangled_name": obj.get("mangled_name"),
+            "ranges": [Range.from_dict(_item) for _item in obj["ranges"]] if obj.get("ranges") is not None else None,
+            "line_ranges": [LineRange.from_dict(_item) for _item in obj["line_ranges"]] if obj.get("line_ranges") is not None else None,
+            "decompiler_notes": [DecompilerNote.from_dict(_item) for _item in obj["decompiler_notes"]] if obj.get("decompiler_notes") is not None else None
         })
         return _obj
 

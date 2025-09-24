@@ -2,7 +2,6 @@ import typing as ty
 
 import anyio
 from decompai_ida.copilot_task import CopilotTask
-from decompai_ida.copilot_mcp_server_task import CopilotMCPServerTask
 import exceptiongroup
 from anyio.abc import ObjectReceiveStream
 
@@ -25,7 +24,6 @@ from decompai_ida.broadcast_ida_events_task import (
     BroadcastHexRaysEventsTask,
     BroadcastIdaEventsTask,
 )
-from decompai_ida.clear_inference_marks_task import ClearInferenceMarksTask
 from decompai_ida.download_inferences_task import DownloadInferencesTask
 from decompai_ida.events import (
     DatabaseClosed,
@@ -34,6 +32,7 @@ from decompai_ida.events import (
     IdaEvent,
 )
 from decompai_ida.fetch_user_config_task import FetchUserConfigTask
+from decompai_ida.ask_initial_questions_task import AskInitialQuestions
 from decompai_ida.model import CopilotModel, Model
 from decompai_ida.monitor_initial_analysis_task import (
     MonitorInitialAnalysisTask,
@@ -59,29 +58,50 @@ from decompai_ida.track_ida_settled_task import TrackIdaSettledTask
 from decompai_ida.trigger_apply_inferences_task import (
     TriggerApplyInferencesTask,
 )
-from decompai_ida.trigger_initial_upload_task import TriggerInitialUploadTask
-from decompai_ida.ui.ui_task import UiTask
-from decompai_ida.ui.copilot_ui_task import CopilotUiTask
 from decompai_ida.upload_original_files_task import UploadOriginalFilesTask
 from decompai_ida.upload_revisions_task import UploadRevisionsTask
 
+try:
+    from decompai_ida.ui.ui_task import UiTask
+    from decompai_ida.ui.copilot_ui_task import CopilotUiTask
+    from decompai_ida.ui.swift_ui_task import SwiftUiTask
+    from decompai_ida.ui.functions_colorizer_task import FunctionsColorizerTask
+    from decompai_ida.ui.zenyard_menu_task import ZenyardMenuTask
+
+    _UI_GLOBAL_TASKS = [
+        ZenyardMenuTask,
+    ]
+
+    _UI_TASKS = [
+        CopilotUiTask,
+        FunctionsColorizerTask,
+        SwiftUiTask,
+        UiTask,
+    ]
+except ImportError:
+    _UI_GLOBAL_TASKS = []
+    _UI_TASKS = []
+
 _STATIC_CONFIG = StaticConfiguration(
-    max_objects_in_revision=512,
+    max_objects_in_revision=64,
     max_upload_bytes=2 * 1024 * 1024,
 )
 
 # Tasks that run without any database open.
-_GLOBAL_TASKS: ty.Collection[type[GlobalTask]] = (BroadcastIdaEventsTask,)
+_GLOBAL_TASKS: ty.Collection[type[GlobalTask]] = (
+    BroadcastIdaEventsTask,
+    *_UI_GLOBAL_TASKS,
+)
 
 # Tasks that run when a DB is open (inactive or active).
 _TASKS: ty.Collection[type[Task]] = (
     ApplyPendingInferencesTask,
     BroadcastHexRaysEventsTask,
-    ClearInferenceMarksTask,
+    CopilotTask,
+    FetchUserConfigTask,
     TrackChangesTask,
     TrackIdaSettledTask,
-    UiTask,
-    CopilotUiTask,
+    *_UI_TASKS,
     # TODO: Restore MaintainTidToObjectTask once we resolve crashes
 )
 
@@ -90,16 +110,13 @@ _ACTIVE_TASKS: ty.Collection[type[Task]] = (
     DownloadInferencesTask,
     MonitorInitialAnalysisTask,
     PollServerStatusTask,
+    AskInitialQuestions,
     RegisterBinaryTask,
     ShowInitialUploadMessageTask,
     StartForegroundTasksTask,
     TriggerApplyInferencesTask,
-    TriggerInitialUploadTask,
     UploadOriginalFilesTask,
     UploadRevisionsTask,
-    CopilotTask,
-    CopilotMCPServerTask,
-    FetchUserConfigTask,
 )
 
 _stop: ty.Callable[[bool], None] = lambda _: None  # noqa: E731

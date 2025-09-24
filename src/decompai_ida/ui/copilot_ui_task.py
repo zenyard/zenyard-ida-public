@@ -55,52 +55,29 @@ class CopilotUiTask(Task):
         # Create view model
         self._view_model = CopilotViewModel(self._ctx.copilot_model)
 
-        # Register action handler
-        await self._register_action_handler()
+        # Create action handler
+        self._action_handler = OpenCopilotActionHandler(self)
 
-        # Main loop: update view model when copilot model changes
-        while True:
-            with anyio.move_on_after(1):
-                await self._ctx.copilot_model.wait_for_update()
-            if self._view_model is not None:
-                self._view_model.update_from_model()
-
-    async def _register_action_handler(self) -> None:
-        """Register the copilot action handler in the UI thread."""
-
-        def register_action():
-            try:
-                # Create action handler
-                self._action_handler = OpenCopilotActionHandler(self)
-
-                # Create menu if it doesn't exist
-                ida_kernwin.create_menu("zenyard", "&Zenyard", "Help")
-
-                # Unregister the action first to ensure previous action handlers are not called
-                ida_kernwin.unregister_action(OPEN_COPILOT_ACTION_ID)
-
-                # Register action
-                ida_kernwin.register_action(
-                    ida_kernwin.action_desc_t(
-                        OPEN_COPILOT_ACTION_ID,
-                        "Open Copilot",
-                        self._action_handler,
-                        "Ctrl+Alt+C",
-                        "Open Zenyard's Copilot",
-                    )
-                )
-
-                # Attach to menu
-                ida_kernwin.attach_action_to_menu(
+        async with ida_tasks.install_action(
+            OPEN_COPILOT_ACTION_ID,
+            "Open Copilot",
+            self._action_handler,
+            "Ctrl+Alt+C",
+            "Open Zenyard's Copilot",
+        ):
+            # Attach to menu
+            await ida_tasks.run_ui(
+                lambda: ida_kernwin.attach_action_to_menu(
                     "Zenyard/Open Copilot", OPEN_COPILOT_ACTION_ID, 0
                 )
+            )
 
-                logger.debug("Copilot action handler registered successfully")
-
-            except Exception as e:
-                logger.error(f"Error registering copilot action: {e}")
-
-        await ida_tasks.run_ui(register_action)
+            # Main loop: update view model when copilot model changes
+            while True:
+                with anyio.move_on_after(1):
+                    await self._ctx.copilot_model.wait_for_update()
+                if self._view_model is not None:
+                    self._view_model.update_from_model()
 
     def open_copilot_window(self) -> None:
         """Open the copilot window or focus if already open."""

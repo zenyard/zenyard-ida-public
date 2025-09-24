@@ -5,6 +5,7 @@ import typing as ty
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
+from decompai_ida import ida_tasks
 from decompai_ida.model import Model, TaskName
 
 # Time, in seconds, between disconnection warning being set until it is
@@ -27,6 +28,7 @@ class StatusBarViewModel(QObject):
     progress_bar_visible = pyqtSignal(bool)
     progress_bar_range = pyqtSignal(int, int)
     progress_bar_value = pyqtSignal(int)
+    swift_source_available_icon_visible = pyqtSignal(bool)
 
     def __init__(self, model: Model):
         super().__init__()
@@ -35,6 +37,7 @@ class StatusBarViewModel(QObject):
     async def emit_current_state(self):
         await self._emit_activity_details()
         self._emit_connectivity_warning()
+        self._emit_swift_source_available()
 
     async def _emit_activity_details(self):
         if self._model.runtime_status.disabled:
@@ -52,7 +55,11 @@ class StatusBarViewModel(QObject):
         elif self._is_background_task_active("registering"):
             self._emit_status("Registering at server", progress="busy")
 
-        elif (analysis_status := await self._get_analysis_status()) is not None:
+        elif (
+            analysis_status := await ida_tasks.run(
+                self._get_analysis_status_sync
+            )
+        ) is not None:
             if analysis_status.eta is not None:
                 formatted_eta = _format_eta(analysis_status.eta)
                 eta_label = f"{formatted_eta} left"
@@ -101,6 +108,11 @@ class StatusBarViewModel(QObject):
             disconnection_time > _DISCONNECTION_GRACE_PERIOD
         )
 
+    def _emit_swift_source_available(self):
+        self.swift_source_available_icon_visible.emit(
+            self._model.swift_source_available
+        )
+
     def _emit_status(
         self,
         label,
@@ -132,13 +144,18 @@ class StatusBarViewModel(QObject):
     def _is_background_task_active(self, task_name: TaskName) -> bool:
         return task_name in self._model.runtime_status.active_tasks
 
-    async def _get_analysis_status(self) -> ty.Optional["_AnalysisStatus"]:
-        revision = (
-            await self._model.revision.get()
-            + await self._model.revision_queue.size()
-        )
-        server_revision = await self._model.server_revision.get()
-        last_done_revision = await self._model.last_done_revision.get()
+    def _get_analysis_status_sync(self) -> ty.Optional["_AnalysisStatus"]:
+        uploaded_revision = self._model.revision.get_sync()
+        server_revision = self._model.server_revision.get_sync()
+
+        if uploaded_revision == server_revision:
+            # No revision was uploaded yet. We prefer showing "Uploading" over
+            # "Analyzing" in this state.
+            return
+
+        revisions_in_upload_queue = self._model.revision_queue.size_sync()
+        revision = uploaded_revision + revisions_in_upload_queue
+        last_done_revision = self._model.last_done_revision.get_sync()
 
         # Avoid division by zero
         if revision == last_done_revision:

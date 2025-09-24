@@ -15,6 +15,9 @@ from decompai_ida.objects import validate_object
 from decompai_ida.tasks import Task
 
 
+_MAX_RETRIES_FOR_REVISION_REQUEST = 5
+
+
 class UploadRevisionsTask(Task):
     async def _run(self):
         await self._ctx.model.wait_for_registration()
@@ -23,7 +26,10 @@ class UploadRevisionsTask(Task):
             await logger.adebug("Starting to upload queued revisions")
             with self._ctx.model.report_and_notify_background_task("uploading"):
                 while (await self._ctx.model.revision_queue.size()) > 0:
-                    await self._upload_revision()
+                    await self._retry_api_request_forever(
+                        lambda: self._upload_revision(),
+                        description="Upload revision",
+                    )
             await logger.adebug("Done uploading queued revisions")
 
     async def _upload_revision(self):
@@ -58,6 +64,7 @@ class UploadRevisionsTask(Task):
                     ),
                 ),
                 description=f"Create revision {next_revision}",
+                max_retries=_MAX_RETRIES_FOR_REVISION_REQUEST,
             )
 
             valid_objects = await _drop_invalid_objects(revision.objects)
@@ -78,6 +85,7 @@ class UploadRevisionsTask(Task):
                     description=(
                         f"Upload chunk #{i+1} with {len(chunk)} objects to revision {next_revision}"
                     ),
+                    max_retries=_MAX_RETRIES_FOR_REVISION_REQUEST,
                 )
 
             await logger.adebug("Finishing revision")
@@ -89,6 +97,7 @@ class UploadRevisionsTask(Task):
                     ),
                 ),
                 description=f"Finish revision {next_revision}",
+                max_retries=_MAX_RETRIES_FOR_REVISION_REQUEST,
             )
 
             # Update queue and current revision together to avoid showing wrong

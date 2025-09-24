@@ -17,31 +17,17 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, StrictStr, field_validator
+from pydantic import BaseModel, ConfigDict, StrictBool
 from typing import Any, ClassVar, Dict, List, Optional
-from decompai_client.models.original_languages import OriginalLanguages
 from typing import Optional, Set
 from typing_extensions import Self
 
-class BinaryDetails(BaseModel):
+class OriginalLanguages(BaseModel):
     """
-    Binary-level parameters. Fixed at binary creation time.
+    Programming languages the original binary was compiled from. Default is False for all languages.
     """ # noqa: E501
-    instructions: Optional[StrictStr] = None
-    original_languages: Optional[OriginalLanguages] = None
-    platform: Optional[StrictStr] = None
-    os_version: Optional[StrictStr] = None
-    __properties: ClassVar[List[str]] = ["instructions", "original_languages", "platform", "os_version"]
-
-    @field_validator('platform')
-    def platform_validate_enum(cls, value):
-        """Validates the enum"""
-        if value is None:
-            return value
-
-        if value not in set(['ios', 'macos']):
-            raise ValueError("must be one of enum values ('ios', 'macos')")
-        return value
+    swift: Optional[StrictBool] = False
+    __properties: ClassVar[List[str]] = ["swift"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -61,7 +47,7 @@ class BinaryDetails(BaseModel):
 
     @classmethod
     def from_json(cls, json_str: str) -> Optional[Self]:
-        """Create an instance of BinaryDetails from a JSON string"""
+        """Create an instance of OriginalLanguages from a JSON string"""
         return cls.from_dict(json.loads(json_str))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -82,29 +68,11 @@ class BinaryDetails(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
-        # override the default output from pydantic by calling `to_dict()` of original_languages
-        if self.original_languages:
-            _dict['original_languages'] = self.original_languages.to_dict()
-        # set to None if instructions (nullable) is None
-        # and model_fields_set contains the field
-        if self.instructions is None and "instructions" in self.model_fields_set:
-            _dict['instructions'] = None
-
-        # set to None if platform (nullable) is None
-        # and model_fields_set contains the field
-        if self.platform is None and "platform" in self.model_fields_set:
-            _dict['platform'] = None
-
-        # set to None if os_version (nullable) is None
-        # and model_fields_set contains the field
-        if self.os_version is None and "os_version" in self.model_fields_set:
-            _dict['os_version'] = None
-
         return _dict
 
     @classmethod
     def from_dict(cls, obj: Optional[Dict[str, Any]]) -> Optional[Self]:
-        """Create an instance of BinaryDetails from a dict"""
+        """Create an instance of OriginalLanguages from a dict"""
         if obj is None:
             return None
 
@@ -112,10 +80,7 @@ class BinaryDetails(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "instructions": obj.get("instructions"),
-            "original_languages": OriginalLanguages.from_dict(obj["original_languages"]) if obj.get("original_languages") is not None else None,
-            "platform": obj.get("platform"),
-            "os_version": obj.get("os_version")
+            "swift": obj.get("swift") if obj.get("swift") is not None else False
         })
         return _obj
 

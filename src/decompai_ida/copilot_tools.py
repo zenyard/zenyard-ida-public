@@ -1,5 +1,7 @@
 from dataclasses import dataclass
-import anyio
+import re
+import typing as ty
+
 import ida_funcs
 import ida_hexrays
 import ida_kernwin
@@ -7,30 +9,46 @@ import ida_name
 import ida_typeinf
 import idaapi
 import idautils
-import re
-import socket
-import typing as ty
 
 from pydantic import Field
-from decompai_ida import ida_tasks, logger
-from decompai_ida.tasks import Task
-from fastmcp import FastMCP
+from decompai_ida import ida_tasks
+from decompai_ida.model import Model
+from decompai_ida.swift_utils import (
+    find_latest_swift_function_inference_sync,
+    is_swift_binary_sync,
+)
 from itertools import dropwhile, islice
-
-import uvicorn
-
+from langchain.tools import tool
 
 Address = ty.Annotated[str, "The address in hex string"]
+
+_SymbolName: ty.TypeAlias = ty.Annotated[
+    str,
+    "Symbol name to resolve to an address. Can be a function name or a global variable name.",
+]
 
 
 @dataclass(frozen=True)
 class Function:
     name: str
     address: Address
+    swift_source_available: bool
 
     @staticmethod
-    def from_ea(ea: int) -> "Function":
-        return Function(ida_name.get_name(ea), format_address(ea))
+    def from_ea(model: Model, ea: int) -> "Function":
+        if not is_swift_binary_sync():
+            swift_source_available = False
+        else:
+            swift_function = find_latest_swift_function_inference_sync(
+                model, ea
+            )
+            swift_source_available = swift_function is not None
+
+        return Function(
+            ida_name.get_name(ea),
+            format_address(ea),
+            swift_source_available=swift_source_available,
+        )
 
 
 @dataclass(frozen=True)
@@ -73,6 +91,18 @@ def decompile_function_sync(address: str) -> str:
     return str(decompiled)
 
 
+def get_swift_source_sync(model: Model, address: str) -> str:
+    func = get_function(address)
+    swift_function = find_latest_swift_function_inference_sync(
+        model, func.start_ea
+    )
+    if swift_function is None:
+        raise Exception(
+            f"No Swift source code available for function at {address}"
+        )
+    return swift_function.source
+
+
 def get_symbol_address_by_name_sync(symbol_name: str) -> Address:
     name_ea = ida_name.get_name_ea(0, symbol_name)
     if name_ea != idaapi.BADADDR:
@@ -82,14 +112,14 @@ def get_symbol_address_by_name_sync(symbol_name: str) -> Address:
         raise Exception("Failed to resolve symbol to address")
 
 
-def get_current_function_sync() -> ty.Optional[Function]:
+def get_current_function_sync(model: Model) -> ty.Optional[Function]:
     current_address = idaapi.get_screen_ea()
     func = ida_funcs.get_func(current_address)
     if func is None:
         raise Exception(
             f"There's no function in address: {format_address(current_address)}"
         )
-    return Function.from_ea(func.start_ea)
+    return Function.from_ea(model, func.start_ea)
 
 
 def rename_function_local_variable_sync(
@@ -108,6 +138,7 @@ def rename_symbol_sync(address: str, new_name: str):
 
 
 def list_calling_functions_sync(
+    model: Model,
     address: str,
     cursor: ty.Optional[str] = None,
     page_size: int = 200,
@@ -122,7 +153,7 @@ def list_calling_functions_sync(
         by=format_address,
         cursor=cursor,
         page_size=page_size,
-    ).map(Function.from_ea)
+    ).map(lambda ea: Function.from_ea(model, ea))
 
 
 def get_function_comment_sync(address: str) -> ty.Optional[str]:
@@ -195,6 +226,7 @@ def get_local_types_sync(
 
 
 def _paginate_functions(
+    model: Model,
     cursor: ty.Optional[str],
     page_size: int,
     filter_predicate: ty.Callable[[int], bool],
@@ -203,6 +235,7 @@ def _paginate_functions(
     Generic pagination helper for IDA functions.
 
     Args:
+        model: Model instance for Swift source availability checking
         cursor: Optional cursor for pagination (hex address string)
         page_size: Number of functions to return per page
         filter_predicate: Function that takes func_ea and returns True if function should be included
@@ -221,11 +254,14 @@ def _paginate_functions(
         by=format_address,
         cursor=cursor,
         page_size=page_size,
-    ).map(Function.from_ea)
+    ).map(lambda ea: Function.from_ea(model, ea))
 
 
 def search_function_comments_sync(
-    regex_pattern: str, cursor: ty.Optional[str] = None, page_size: int = 200
+    model: Model,
+    regex_pattern: str,
+    cursor: ty.Optional[str] = None,
+    page_size: int = 200,
 ) -> PagedResults[Function]:
     def comment_matches(func_ea: int) -> bool:
         func = ida_funcs.get_func(func_ea)
@@ -236,10 +272,28 @@ def search_function_comments_sync(
             return False
         return re.search(regex_pattern, comment) is not None
 
-    return _paginate_functions(cursor, page_size, comment_matches)
+    return _paginate_functions(model, cursor, page_size, comment_matches)
+
+
+def search_swift_functions_sync(
+    model: Model,
+    regex_pattern: str,
+    cursor: ty.Optional[str] = None,
+    page_size: int = 200,
+) -> PagedResults[Function]:
+    def swift_source_matches(func_ea: int) -> bool:
+        swift_function = find_latest_swift_function_inference_sync(
+            model, func_ea
+        )
+        if swift_function is None:
+            return False
+        return re.search(regex_pattern, swift_function.source) is not None
+
+    return _paginate_functions(model, cursor, page_size, swift_source_matches)
 
 
 def list_functions_sync(
+    model: Model,
     filter: ty.Optional[str],
     cursor: ty.Optional[str] = None,
     page_size: int = 200,
@@ -252,7 +306,7 @@ def list_functions_sync(
             return False
         return re.search(filter, func_name) is not None
 
-    return _paginate_functions(cursor, page_size, name_matches)
+    return _paginate_functions(model, cursor, page_size, name_matches)
 
 
 def _update_pseudocode_viewer():
@@ -316,227 +370,178 @@ def _paginate_results(
     return PagedResults(results=results, next_cursor=next_cursor)
 
 
-class CopilotMCPServerTask(Task):
-    async def _run(self) -> None:
-        user_config = await self._ctx.model.wait_for_user_config()
-        if user_config.copilot is None:
-            return
+async def get_copilot_tools(model: Model):
+    @tool()
+    async def get_current_function() -> ty.Optional[Function]:
+        """
+        Returns the current function address and name, or None if not currently in a function.
+        """
+        return await ida_tasks.run(get_current_function_sync, model)
 
-        mcp = FastMCP("zenyard-mcp", log_level="ERROR")
+    @tool()
+    async def get_symbol_address_by_name(symbol_name: _SymbolName) -> Address:
+        """
+        Get address of function or global variable given its name.
+        """
+        return await ida_tasks.run(get_symbol_address_by_name_sync, symbol_name)
 
-        # TODO: Currently waiting for: https://github.com/modelcontextprotocol/modelcontextprotocol/pull/371
-        # to be available in fastmcp and langchain to document return value
-        @mcp.tool()
-        async def get_current_function() -> ty.Optional[Function]:
-            """
-            Returns the current function address and name, or None if not currently in a function.
-            """
-            return await ida_tasks.run(get_current_function_sync)
+    @tool()
+    async def list_functions(
+        filter: ty.Annotated[
+            ty.Optional[str],
+            "An optional regex to filter the list of functions",
+        ],
+        cursor: ty.Annotated[
+            ty.Optional[str], "Optional hex address to start from"
+        ] = None,
+    ) -> PagedResults[Function]:
+        "Returns a paginated list of functions (names and addresses) from ida"
+        return await ida_tasks.run(list_functions_sync, model, filter, cursor)
 
-        @mcp.tool()
-        async def get_symbol_address_by_name(
-            symbol_name: ty.Annotated[
-                str,
-                Field(
-                    description="Symbol name to resolve to an address."
-                    " Can be a function name or a global variable name."
-                ),
-            ],
-        ) -> Address:
-            return await ida_tasks.run(
-                get_symbol_address_by_name_sync, symbol_name
-            )
+    @tool()
+    async def decompile_function(
+        address: ty.Annotated[str, "Address of the function to decompile"],
+    ) -> str:
+        """Returns the decompiled code of the given function"""
+        return await ida_tasks.run(decompile_function_sync, address)
 
-        @mcp.tool()
-        async def list_functions(
-            filter: ty.Annotated[
-                ty.Optional[str],
-                Field(
-                    description="An optional regex to filter the list of functions"
-                ),
-            ],
-            cursor: ty.Annotated[
-                ty.Optional[str],
-                Field(description="Optional hex address to start from"),
-            ] = None,
-        ) -> PagedResults[Function]:
-            "Returns a paginated list of functions (names and addresses) from ida"
-            return await ida_tasks.run(list_functions_sync, filter, cursor)
+    @tool()
+    async def rename_function_local_variable(
+        address: ty.Annotated[
+            str,
+            "Address of the function to rename a local variable in",
+        ],
+        from_name: ty.Annotated[
+            str,
+            "The original name of the variable to rename",
+        ],
+        to_name: ty.Annotated[str, "The new name of the variable"],
+    ):
+        """Rename a local variable in the given function"""
+        return await ida_tasks.run(
+            rename_function_local_variable_sync, address, from_name, to_name
+        )
 
-        @mcp.tool()
-        async def decompile_function(
+    @tool()
+    async def rename_symbol(
+        symbol_address: _SymbolName,
+        new_name: ty.Annotated[str, "The new name for the symbol."],
+    ):
+        """Renames a symbol such as a function or a global variable"""
+        # TODO: Consider using from_name, to_name to lower chance of hallucinations
+        return await ida_tasks.run(rename_symbol_sync, symbol_address, new_name)
+
+    @tool()
+    async def list_calling_functions(
+        address: ty.Annotated[str, "Address of the function being called"],
+        cursor: ty.Annotated[ty.Optional[str], "Cursor for pagination"] = None,
+    ) -> PagedResults[Function]:
+        """
+        Returns a list of functions that call the given function.
+        If next_cursor is not empty that means there are more pages which can be fetched using the cursor parameter.
+        """
+        return await ida_tasks.run(
+            list_calling_functions_sync, model, address, cursor
+        )
+
+    @tool()
+    async def get_function_comment(
+        address: ty.Annotated[str, "Address of the function"],
+    ) -> ty.Optional[str]:
+        """Returns the function documentation for the given function"""
+        return await ida_tasks.run(get_function_comment_sync, address)
+
+    @tool()
+    async def set_function_comment(
+        address: ty.Annotated[str, "Address of the function"],
+        comment: ty.Annotated[
+            ty.Optional[str],
+            "The new function documentation or None to remove the current one. "
+            "Use 80 character lines and format this like a function documentation.",
+        ],
+    ) -> ty.Optional[str]:
+        """Sets the function documentation for the given function"""
+        return await ida_tasks.run(set_function_comment_sync, address, comment)
+
+    @tool()
+    async def set_function_prototype(
+        address: ty.Annotated[str, "Address of the function"],
+        new_prototype: ty.Annotated[
+            str, "A new c-style function prototype for the function"
+        ],
+    ):
+        """Sets a function's prototype"""
+        return await ida_tasks.run(
+            set_function_prototype_sync, address, new_prototype
+        )
+
+    @tool()
+    async def get_local_types(
+        cursor: ty.Annotated[
+            ty.Optional[str], "Optional cursor for pagination"
+        ] = None,
+    ) -> PagedResults[LocalType]:
+        """Returns a paginated list of local types with their definitions"""
+        return await ida_tasks.run(get_local_types_sync, cursor)
+
+    @tool()
+    async def search_function_comments(
+        regex: ty.Annotated[
+            str, "Regular expression pattern to search for in function comments"
+        ],
+        cursor: ty.Annotated[
+            ty.Optional[str], "Optional hex address to start from"
+        ] = None,
+    ) -> PagedResults[Function]:
+        """Returns a paginated list of functions with comments matching the given regex pattern"""
+        return await ida_tasks.run(
+            search_function_comments_sync, model, regex, cursor
+        )
+
+    copilot_tools = [
+        get_current_function,
+        get_symbol_address_by_name,
+        list_functions,
+        decompile_function,
+        rename_function_local_variable,
+        rename_symbol,
+        list_calling_functions,
+        get_function_comment,
+        set_function_comment,
+        set_function_prototype,
+        get_local_types,
+        search_function_comments,
+    ]
+
+    # Only register Swift tools if this is a Swift binary
+    if await ida_tasks.run(is_swift_binary_sync):
+
+        @tool()
+        async def get_swift_source(
             address: ty.Annotated[
-                str, Field(description="Address of the function to decompile")
+                str,
+                "Address of the function to get Swift source for",
             ],
         ) -> str:
-            """Returns the decompiled code of the given function"""
-            return await ida_tasks.run(decompile_function_sync, address)
+            """Returns the decompiled Swift source code of the given function"""
+            return await ida_tasks.run(get_swift_source_sync, model, address)
 
-        @mcp.tool()
-        async def rename_function_local_variable(
-            address: ty.Annotated[
-                str,
-                Field(
-                    description="Address of the function to rename a local variable in"
-                ),
-            ],
-            from_name: ty.Annotated[
-                str,
-                Field(
-                    description="The original name of the variable to rename"
-                ),
-            ],
-            to_name: ty.Annotated[
-                str, Field(description="The new name of the variable")
-            ],
-        ):
-            """Rename a local variable in the given function"""
-            return await ida_tasks.run(
-                rename_function_local_variable_sync, address, from_name, to_name
-            )
-
-        @mcp.tool()
-        async def rename_symbol(
-            symbol_address: ty.Annotated[
-                str,
-                Field(
-                    description="Symbol address to rename."
-                    " Can be a function name or a global variable name."
-                ),
-            ],
-            new_name: ty.Annotated[
-                str,
-                Field(description="The new name for the symbol."),
-            ],
-        ):
-            """Renames a symbol such as a function or a global variable"""
-            # TODO: Consider using from_name, to_name to lower chance of hallucinations
-            return await ida_tasks.run(
-                rename_symbol_sync, symbol_address, new_name
-            )
-
-        @mcp.tool()
-        async def list_calling_functions(
-            address: ty.Annotated[
-                str,
-                Field(description="Address of the function being called"),
-            ],
-            cursor: ty.Annotated[
-                ty.Optional[str],
-                Field(description="Cursor for pagination"),
-            ] = None,
-        ) -> PagedResults[Function]:
-            """
-            Returns a list of functions that call the given function.
-            If next_cursor is not empty that means there are more pages which can be fetched using the cursor parameter.
-            """
-            return await ida_tasks.run(
-                list_calling_functions_sync, address, cursor
-            )
-
-        @mcp.tool()
-        async def get_function_comment(
-            address: ty.Annotated[
-                str,
-                Field(description="Address of the function"),
-            ],
-        ) -> ty.Optional[str]:
-            """Returns the function documentation for the given function"""
-            return await ida_tasks.run(get_function_comment_sync, address)
-
-        @mcp.tool()
-        async def set_function_comment(
-            address: ty.Annotated[
-                str,
-                Field(description="Address of the function"),
-            ],
-            comment: ty.Annotated[
-                ty.Optional[str],
-                Field(
-                    description="""
-                      The new function documentation or None to remove the current one.
-                      Use 80 character lines and format this like a function documentation.
-                """
-                ),
-            ],
-        ) -> ty.Optional[str]:
-            """Sets the function documentation for the given function"""
-            return await ida_tasks.run(
-                set_function_comment_sync, address, comment
-            )
-
-        @mcp.tool()
-        async def set_function_prototype(
-            address: ty.Annotated[
-                str,
-                Field(description="Address of the function"),
-            ],
-            new_prototype: ty.Annotated[
-                str,
-                Field(
-                    description="""
-                      A new c-style function prototype for the function
-                """
-                ),
-            ],
-        ):
-            """Sets a function's prototype"""
-            return await ida_tasks.run(
-                set_function_prototype_sync, address, new_prototype
-            )
-
-        @mcp.tool()
-        async def get_local_types(
-            cursor: ty.Annotated[
-                ty.Optional[str],
-                Field(description="Optional cursor for pagination"),
-            ] = None,
-        ) -> PagedResults[LocalType]:
-            """Returns a paginated list of local types with their definitions"""
-            return await ida_tasks.run(get_local_types_sync, cursor)
-
-        @mcp.tool()
-        async def search_function_comments(
+        @tool()
+        async def search_swift_functions(
             regex: ty.Annotated[
                 str,
-                Field(
-                    description="Regular expression pattern to search for in function comments"
-                ),
+                "Regular expression pattern to search for in Swift function source code",
             ],
             cursor: ty.Annotated[
                 ty.Optional[str],
                 Field(description="Optional hex address to start from"),
             ] = None,
         ) -> PagedResults[Function]:
-            """Returns a paginated list of functions with comments matching the given regex pattern"""
+            """Returns a paginated list of functions with Swift source code matching the given regex pattern"""
             return await ida_tasks.run(
-                search_function_comments_sync, regex, cursor
+                search_swift_functions_sync, model, regex, cursor
             )
 
-        mcp.settings.host = "localhost"
-        mcp.settings.log_level = "ERROR"
+        copilot_tools += [get_swift_source, search_swift_functions]
 
-        starlette_app = mcp.http_app(transport="streamable-http")
-
-        # Create and bind socket to get an available port
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.bind(("localhost", 0))
-        server_port = sock.getsockname()[1]  # Get the actual assigned port
-        assert isinstance(server_port, int), "Socket port should be an integer"
-
-        await logger.ainfo(f"MCP server port assigned: {server_port}")
-        # Set the MCP server port in the copilot model and notify waiting tasks
-        self._ctx.copilot_model.mcp_server_port = server_port
-        self._ctx.copilot_model.notify_update()
-
-        config = uvicorn.Config(
-            starlette_app,
-            log_level=mcp.settings.log_level.lower(),
-        )
-        server = uvicorn.Server(config)
-        try:
-            await server.serve(sockets=[sock])
-        finally:
-            with anyio.CancelScope(shield=True):
-                await server.shutdown()
-            sock.close()
+    return copilot_tools

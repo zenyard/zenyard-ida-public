@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from inspect import cleandoc
 
-from decompai_ida import inferences, logger, objects
+from decompai_ida import ida_tasks, inferences, logger, objects
 from decompai_ida.object_graph import get_objects_in_approx_topo_order_sync
 from decompai_ida.model import Revision, SyncStatus
 from decompai_ida.tasks import ForegroundTask, TaskContext
@@ -59,6 +59,7 @@ class QueueRevisionsTask(ForegroundTask):
             ):
                 self._flush_revision()
             self._wait_box.mark_items_complete(1)
+            ida_tasks.execute_queued_tasks_sync()
 
         if len(self._buffer) > 0:
             self._flush_revision()

@@ -23,6 +23,7 @@ from decompai_client import (
     UserConfig,
     VariablesMapping,
     GlobalVariable,
+    SwiftFunction,
 )
 from decompai_ida import ida_tasks, storage
 from decompai_ida.ida_tasks import AsyncCallback
@@ -30,7 +31,6 @@ from decompai_ida.serialization import EncodedBytes
 
 if ty.TYPE_CHECKING:
     from decompai_ida.tasks import ForegroundTask
-    from decompai_ida.ui.copilot import Message
 
 
 # Similar to definitions of `Object` and `Inference` from API, but easier to
@@ -39,7 +39,7 @@ if ty.TYPE_CHECKING:
 Object: tye.TypeAlias = ty.Union[Function, Thunk, GlobalVariable]
 
 Inference: tye.TypeAlias = ty.Union[
-    FunctionOverview, Name, ParametersMapping, VariablesMapping
+    FunctionOverview, Name, ParametersMapping, VariablesMapping, SwiftFunction
 ]
 
 
@@ -125,6 +125,12 @@ class RuntimeStatus:
 
 
 @dataclass
+class Message:
+    sender: ty.Literal["AI", "User"]
+    text: str
+
+
+@dataclass
 class CopilotModel:
     """
     Model for copilot chat state and communication.
@@ -134,7 +140,6 @@ class CopilotModel:
     is_active: bool = False
     stop_requested: bool = False
     clear_requested: bool = False
-    mcp_server_port: ty.Optional[int] = None
     _updated: anyio.Event = field(init=False)
     notify_update: AsyncCallback = field(init=False)
 
@@ -173,6 +178,7 @@ class Model:
         self.runtime_status = RuntimeStatus()
         self._updated = anyio.Event()
         self.copilot_model = CopilotModel()
+        self.swift_source_available = False
 
     def _open_storages_sync(self):
         "Use `create`!"
@@ -182,8 +188,13 @@ class Model:
         self.initial_upload_complete = storage.SingleValue(
             "initial_upload_complete", bool, default=False
         )
-        self.initial_upload_suggested = storage.SingleValue(
+        # NOTE: Storage name keeps historical "initial_upload_suggested" key for
+        # backward compatibility while the model field is renamed.
+        self.asked_initial_questions = storage.SingleValue(
             "initial_upload_suggested", bool, default=False
+        )
+        self.binary_instructions = storage.SingleValue(
+            "binary_instructions", ty.Optional[str], default=None
         )
         self.original_files_uploaded = storage.SingleValue(
             "original_files_uploaded", bool, default=False
@@ -243,7 +254,29 @@ class Model:
         while (await self.binary_id.get()) is None:
             await self.wait_for_update()
 
+    async def wait_for_initial_questions(self):
+        while not await self.asked_initial_questions.get():
+            await self.wait_for_update()
+
     async def wait_for_user_config(self) -> UserConfig:
         while self.runtime_status.user_config is None:
             await self.wait_for_update()
         return self.runtime_status.user_config
+
+    async def clear_all(self):
+        await self.binary_id.clear()
+        await self.initial_upload_complete.clear()
+        await self.asked_initial_questions.clear()
+        await self.binary_instructions.clear()
+        await self.original_files_uploaded.clear()
+        await self.database_dirty.clear()
+        await self.revision.clear()
+        await self.inference_cursor.clear()
+        await self.server_revision.clear()
+        await self.last_done_revision.clear()
+        await self.sync_status.clear()
+        await self.inferences.clear()
+        await self.pending_inferences.clear()
+        await self.revision_queue.clear()
+        await self.inference_queue.clear()
+        await self.tid_to_object.clear()

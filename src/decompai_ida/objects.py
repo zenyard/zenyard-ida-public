@@ -1,6 +1,9 @@
+from collections import defaultdict
 from dataclasses import dataclass
 import hashlib
+from itertools import groupby
 import json
+import re
 import typing as ty
 
 import ida_bytes
@@ -13,8 +16,13 @@ import idautils
 from idaapi import BADADDR
 from more_itertools import ilen, pairwise, take
 
-from decompai_client import AddressDetail, RangeDetail
-from decompai_client.models import Function, Thunk, GlobalVariable
+from decompai_client import AddressDetail, LineRange, RangeDetail
+from decompai_client.models import (
+    Function,
+    Thunk,
+    GlobalVariable,
+    DecompilerNote,
+)
 from decompai_ida import api, inferences, lines, logger
 from decompai_ida.model import Model, Object
 from decompai_ida.transform_code import transform_code
@@ -25,6 +33,8 @@ _IGNORED_SEGMENTS = {
     ".plt.got",
     ".plt.sec",
     ".got",
+    "__stubs",
+    "__objc_stubs",
     # TODO: PE, Mach-O segments?
 }
 
@@ -36,11 +46,43 @@ Skip decompiling functions larger than this. These may cause decompiler to hang 
 long time, and will probably be too large for model.
 """
 
+_MANGLED_NAME_CLEANUP_REGEX = re.compile(r"^(?:j_)+|(?:_\d+)+$")
+
+
+def _clean_mangled_name(name: str) -> str:
+    r"""
+    Clean IDA-generated mangled name by removing common prefixes and suffixes.
+
+    Removes:
+    - j_ prefixes (can occur multiple times)
+    - _\d+ suffixes (can occur multiple times)
+    """
+    return _MANGLED_NAME_CLEANUP_REGEX.sub("", name)
+
 
 @dataclass(frozen=True)
 class Symbol:
     address: int
     type: ty.Literal["function", "global_variable"]
+
+
+def _is_padding_function_sync(address: int) -> bool:
+    func = ida_funcs.get_func(address)
+    if func is None or func.start_ea != address:
+        return False
+
+    if _count_instructions(address) != 1:
+        return False
+
+    if any(True for _ in idautils.XrefsTo(address)):
+        return False
+
+    return True
+
+
+def _is_nullsub_sync(address: int) -> bool:
+    name = ida_name.get_name(address)
+    return name.startswith("nullsub_")
 
 
 def all_object_symbols_sync() -> ty.Iterator[Symbol]:
@@ -54,6 +96,7 @@ def all_object_symbols_sync() -> ty.Iterator[Symbol]:
         yield from (
             Symbol(ea, "function")
             for ea in idautils.Functions(segment_base, segment_end)
+            if not _is_padding_function_sync(ea) and not _is_nullsub_sync(ea)
         )
 
     # Get all global variables with references from code
@@ -148,6 +191,11 @@ def read_object_sync(
                 address, model=model
             )
 
+            mangled_name = (
+                _clean_mangled_name(ida_name.get_name(address))
+                if has_known_name
+                else None
+            )
             result = Function(
                 address=api.format_address(address),
                 name=name,
@@ -156,6 +204,9 @@ def read_object_sync(
                 has_known_name=has_known_name,
                 ranges=list(lines.get_ranges_sync(decompiled)),
                 inference_seq_number=inference_seq_number,
+                line_ranges=list(_get_line_ranges_for_func(decompiled)),
+                mangled_name=mangled_name,
+                decompiler_notes=list(_get_decompiler_notes(decompiled)),
             )
 
     validate_object(result)
@@ -167,7 +218,7 @@ def _decompile(
     *,
     use_decompilation_cache: bool,
     show_wait_box: bool,
-) -> ida_hexrays.cfuncptr_t:
+) -> ida_hexrays.cfunc_t:
     instructions = _count_instructions(func.start_ea)
     if instructions >= _MAX_INSTRUCTIONS_TO_DECOMPILE:
         raise Exception("Not decompiling, too big")
@@ -186,7 +237,7 @@ def _decompile(
 
     if decompiled is None:
         raise Exception(f"Can't decompile: {failure.desc()}")
-    return decompiled
+    return ty.cast(ida_hexrays.cfunc_t, decompiled)
 
 
 def hash_object(obj: Object) -> bytes:
@@ -293,6 +344,34 @@ def _is_object_address(address: int) -> bool:
     return True
 
 
+def _get_line_ranges_for_func(
+    cfunc: ida_hexrays.cfunc_t,
+) -> ty.Iterator[LineRange]:
+    for key, group in groupby(lines.get_line_ids(cfunc)):
+        yield LineRange(id=key, line_count=ilen(group))
+
+
+_WARNINGS_TO_UPLOAD = {
+    ida_hexrays.WARN_UNDEF_LVAR,
+}
+
+
+def _get_decompiler_notes(
+    cfunc: ida_hexrays.cfunc_t,
+) -> ty.Iterator[DecompilerNote]:
+    warnings_per_address = defaultdict[int, list[str]](list)
+
+    for warning in cfunc.get_warnings():
+        if warning.id in _WARNINGS_TO_UPLOAD:
+            warnings_per_address[warning.ea].append(warning.text)
+
+    for line_number, line_address in enumerate(
+        lines.get_line_addresses(cfunc), start=1
+    ):
+        for warning in warnings_per_address.pop(line_address, ()):
+            yield DecompilerNote(line_number=line_number, text=warning)
+
+
 def validate_object(obj: Object):
     """
     Throws `ValueError` if object is not valid.
@@ -314,3 +393,12 @@ def _validate_function(func: Function):
         for range1, range2 in pairwise(sorted_ranges)
     ):
         raise ValueError("Overlapping ranges")
+
+    # If present, line ranges must cover the entire function.
+    if func.line_ranges is not None:
+        covered_lines = sum(range.line_count for range in func.line_ranges)
+        code_lines = func.code.rstrip("\n").count("\n") + 1
+        if covered_lines != code_lines:
+            raise ValueError(
+                f"Code has {code_lines} lines but ranges cover {covered_lines} lines"
+            )

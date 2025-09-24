@@ -68,6 +68,18 @@ class StatusBarWidget(QWidget):
             self._warning_icon.setVisible
         )
 
+        # Swift code available icon
+        self._swift_code_available_icon = QLabel()
+        self._hbox.addWidget(self._swift_code_available_icon)
+        self._swift_code_available_icon.setPixmap(_load_icon("swift.png"))
+        self._swift_code_available_icon.setFixedSize(18, 18)
+        self._swift_code_available_icon.setScaledContents(True)
+        self._swift_code_available_icon.setToolTip("Swift code available")
+        self._swift_code_available_icon.setVisible(False)
+        view_model.swift_source_available_icon_visible.connect(
+            self._swift_code_available_icon.setVisible
+        )
+
         # Label
         self._label = _ClickableLabel()
         self._hbox.addWidget(self._label)

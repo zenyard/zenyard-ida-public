@@ -1,18 +1,19 @@
 import time
 import anyio
+import typing as ty
 
-from decompai_client import (
-    BinaryAnalysisIdle,
-    BinaryAnalysisInProgress,
-)
 from decompai_ida import logger
 from decompai_ida.model import RemoteAnalysisStats
-from decompai_ida.tasks import Task
+from decompai_ida.tasks import Task, TaskContext
 
 _POLL_INTERVAL = 3
 
 
 class PollServerStatusTask(Task):
+    def __init__(self, task_context: TaskContext):
+        super().__init__(task_context)
+        self._max_server_version: ty.Optional[int] = None
+
     async def _run(self):
         await self._ctx.model.wait_for_registration()
 
@@ -29,8 +30,8 @@ class PollServerStatusTask(Task):
                         duration_seconds=time.monotonic() - stats.start_time,
                     )
 
+                self._max_server_version = None
                 self._ctx.model.runtime_status.remote_analysis_stats = None
-
                 self._ctx.model.notify_update()
                 await self._wait_for_client_to_be_ahead_of_server()
 
@@ -70,27 +71,36 @@ class PollServerStatusTask(Task):
         assert binary_id is not None
 
         revision = await self._ctx.model.revision.get()
-        response = await self._retry_api_request_forever(
-            lambda: self._ctx.binaries_api.get_status(binary_id=binary_id),
+        status = await self._retry_api_request_forever(
+            lambda: self._ctx.binaries_api.get_detailed_status(
+                binary_id=binary_id
+            ),
         )
-        status = response.actual_instance
 
         log = logger.bind(local_revision=revision)
 
-        if isinstance(status, BinaryAnalysisIdle):
+        if len(status.revision_analyses) > 0:
+            current_target_revision = max(
+                analysis.revision for analysis in status.revision_analyses
+            )
+            self._max_server_version = max(
+                current_target_revision, self._max_server_version or 0
+            )
+            missing_progress = sum(
+                (1.0 - analysis.progress)
+                for analysis in status.revision_analyses
+            )
+            log = log.bind(
+                server_status="in_progress",
+                server_target_revision=self._max_server_version,
+                server_missing_progress=missing_progress,
+            )
+            progress = self._max_server_version - missing_progress
+        else:
             # Server completed at least the revision stored in DB
             # before calling API.
             progress = revision
             log = log.bind(server_status="idle")
-        elif isinstance(status, BinaryAnalysisInProgress):
-            progress = status.revision - 1 + status.progress
-            log = log.bind(
-                server_status="in_progress",
-                server_revision=status.revision,
-                server_progress=status.progress,
-            )
-        else:
-            raise Exception(f"Unknown status: {status}")
 
         await log.adebug("Got server status", progress=progress)
 

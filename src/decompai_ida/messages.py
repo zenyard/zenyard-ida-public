@@ -57,3 +57,15 @@ async def warn_binary_exceeds_max_size(*, max_size_mb: int):
     """)
 
     await ida_tasks.run_ui(ida_kernwin.warning, message)
+
+
+def inform_no_swift_source_code_sync():
+    ida_kernwin.info(
+        "AUTOHIDE NONE\nThis function doesn't have Swift source code."
+    )
+
+
+def warn_cant_open_swift_pseudocode_sync():
+    ida_kernwin.warning(
+        "AUTOHIDE NONE\nCould not open pseudocode for Swift function."
+    )

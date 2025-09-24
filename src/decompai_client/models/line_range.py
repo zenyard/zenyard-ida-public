@@ -17,20 +17,19 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt
-from typing import Any, ClassVar, Dict, List, Optional
-from decompai_client.models.copilot_config import CopilotConfig
+from pydantic import BaseModel, ConfigDict, Field, StrictStr
+from typing import Any, ClassVar, Dict, List
+from typing_extensions import Annotated
 from typing import Optional, Set
 from typing_extensions import Self
 
-class UserConfig(BaseModel):
+class LineRange(BaseModel):
     """
-    UserConfig
+    Sets a client-side stable ID for a range for consecutive lines.
     """ # noqa: E501
-    copilot: Optional[CopilotConfig] = None
-    max_binary_size_mb: Optional[StrictInt] = 10
-    swiftglow_enabled: Optional[StrictBool] = False
-    __properties: ClassVar[List[str]] = ["copilot", "max_binary_size_mb", "swiftglow_enabled"]
+    line_count: Annotated[int, Field(strict=True, ge=1)]
+    id: StrictStr
+    __properties: ClassVar[List[str]] = ["line_count", "id"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -50,7 +49,7 @@ class UserConfig(BaseModel):
 
     @classmethod
     def from_json(cls, json_str: str) -> Optional[Self]:
-        """Create an instance of UserConfig from a JSON string"""
+        """Create an instance of LineRange from a JSON string"""
         return cls.from_dict(json.loads(json_str))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -71,19 +70,11 @@ class UserConfig(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
-        # override the default output from pydantic by calling `to_dict()` of copilot
-        if self.copilot:
-            _dict['copilot'] = self.copilot.to_dict()
-        # set to None if copilot (nullable) is None
-        # and model_fields_set contains the field
-        if self.copilot is None and "copilot" in self.model_fields_set:
-            _dict['copilot'] = None
-
         return _dict
 
     @classmethod
     def from_dict(cls, obj: Optional[Dict[str, Any]]) -> Optional[Self]:
-        """Create an instance of UserConfig from a dict"""
+        """Create an instance of LineRange from a dict"""
         if obj is None:
             return None
 
@@ -91,9 +82,8 @@ class UserConfig(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "copilot": CopilotConfig.from_dict(obj["copilot"]) if obj.get("copilot") is not None else None,
-            "max_binary_size_mb": obj.get("max_binary_size_mb") if obj.get("max_binary_size_mb") is not None else 10,
-            "swiftglow_enabled": obj.get("swiftglow_enabled") if obj.get("swiftglow_enabled") is not None else False
+            "line_count": obj.get("line_count"),
+            "id": obj.get("id")
         })
         return _obj
 

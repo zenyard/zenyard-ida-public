@@ -6,7 +6,6 @@ import ida_funcs
 import ida_hexrays
 import ida_kernwin
 import ida_name
-import idc
 import structlog
 import typing_extensions as tye
 
@@ -15,6 +14,7 @@ from decompai_client import (
     Name,
     ParametersMapping,
     VariablesMapping,
+    SwiftFunction,
 )
 from decompai_ida import api, logger, markdown
 from decompai_ida.events import block_ida_events
@@ -25,13 +25,6 @@ from decompai_ida.lvars import (
     get_variable_names_sync,
 )
 from decompai_ida.model import Inference, Model
-
-
-def _rgb_to_int(r: int, g: int, b: int) -> int:
-    return (b << 16) + (g << 8) + r
-
-
-INFERRED_COLOR = _rgb_to_int(220, 202, 255)
 
 
 def apply_pending_inferences_sync(address: int, *, model: Model):
@@ -76,6 +69,9 @@ def _apply_inferences_for_address(
                     _apply_parameters(inference, model=model)
                 elif isinstance(inference, VariablesMapping):
                     _apply_variables(inference, model=model)
+                elif isinstance(inference, SwiftFunction):
+                    # Nothing to do - inference read from model when needed.
+                    pass
                 else:
                     _: tye.Never = inference
 
@@ -214,7 +210,6 @@ def _apply_name(name: Name, *, model: Model):
             return
 
         ida_name.set_name(address, name_to_apply, ida_name.SN_FORCE)
-        idc.set_color(address, idc.CIC_FUNC, INFERRED_COLOR)
 
 
 def _apply_variables(variables_mapping: VariablesMapping, *, model: Model):

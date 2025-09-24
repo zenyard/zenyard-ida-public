@@ -54,7 +54,7 @@ class PluginConfiguration(BaseModel, frozen=True):
 
     verify_ssl: bool = True
 
-    ask_for_binary_instructions: bool = False
+    ask_for_binary_instructions: bool = True
 
     show_initial_upload_message: bool = True
 

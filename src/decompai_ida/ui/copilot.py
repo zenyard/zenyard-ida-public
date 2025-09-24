@@ -13,6 +13,7 @@ from textwrap import dedent
 
 from decompai_ida import assets
 from decompai_ida.ida_tasks import AsyncCallback
+from decompai_ida.model import Message
 
 if ty.TYPE_CHECKING:
     from decompai_ida.model import CopilotModel
@@ -62,12 +63,6 @@ class CopilotStyles:
 
     SEND_BUTTON_SEND = "➤"
     SEND_BUTTON_STOP = "■"
-
-
-@dataclass
-class Message:
-    sender: ty.Literal["AI", "User"]
-    text: str
 
 
 @dataclass

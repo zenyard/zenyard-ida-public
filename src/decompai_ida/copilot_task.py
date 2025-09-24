@@ -2,10 +2,11 @@ import copy
 import typing as ty
 
 from decompai_ida import logger
+from decompai_ida.model import Message
 from decompai_ida.tasks import Task, TaskContext
-from decompai_ida.ui.copilot import Message
 from decompai_ida.summarization import SummarizationNode
 from decompai_client.models.copilot_config import CopilotConfig
+from decompai_ida.copilot_tools import get_copilot_tools
 
 from langchain.chat_models import init_chat_model
 from langchain_core.messages.human import HumanMessage
@@ -13,8 +14,6 @@ from langchain_core.messages.utils import count_tokens_approximately
 from langchain_core.prompts.chat import ChatPromptTemplate
 from langchain_core.rate_limiters import InMemoryRateLimiter
 from langchain_core.runnables import RunnableConfig
-from langchain_mcp_adapters.client import MultiServerMCPClient
-from langchain_mcp_adapters.sessions import StreamableHttpConnection
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.pregel import Pregel
 from langgraph.prebuilt import create_react_agent
@@ -183,15 +182,6 @@ class CopilotTask(Task):
     async def _create_agent(
         self, copilot_config: CopilotConfig, checkpointer: InMemorySaver
     ):
-        # Wait for MCP server port to be set
-        copilot_model = self._ctx.copilot_model
-        if copilot_model.mcp_server_port is None:
-            await logger.adebug("Waiting for mcp server to start")
-        while copilot_model.mcp_server_port is None:
-            await copilot_model.wait_for_update()
-        await logger.ainfo(
-            f"MCP server port received: {copilot_model.mcp_server_port}"
-        )
         await logger.ainfo(
             "Initializing copilot with configuration",
             model_name=copilot_config.model_name,
@@ -217,19 +207,7 @@ class CopilotTask(Task):
             **additional_params,
             **computed_additional_params,
         )
-
-        # Get MCP server port from copilot model
-        mcp_server_port = copilot_model.mcp_server_port
-        assert (
-            mcp_server_port is not None
-        ), "MCP server port should be available"
-
-        ida_mcp: StreamableHttpConnection = {
-            "url": f"http://localhost:{mcp_server_port}/mcp",
-            "transport": "streamable_http",
-        }  # type: ignore
-        client = MultiServerMCPClient({"ida": ida_mcp})
-        tools = await client.get_tools()
+        tools = await get_copilot_tools(self._ctx.model)
         llm_for_summarization = (
             init_chat_model(
                 copilot_config.model_name,

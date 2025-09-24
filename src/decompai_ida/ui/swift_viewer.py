@@ -1,15 +1,22 @@
+from functools import cache
 import typing as ty
 import typing_extensions as tye
 from itertools import chain
 import ida_kernwin
 import ida_lines
+import importlib.resources
+from PyQt5 import QtGui
+from PyQt5.QtWidgets import QWidget
 
+from decompai_ida import assets
 from decompai_ida import logger
 from decompai_ida.ui.swift_highlighter import (
     SwiftHighlighter,
     SwiftTokenType,
     HighlightedToken,
 )
+
+FUNC_EA_PROPERTY = "start_ea"
 
 
 class SwiftCodeViewer(ida_kernwin.simplecustviewer_t):
@@ -20,7 +27,7 @@ class SwiftCodeViewer(ida_kernwin.simplecustviewer_t):
     Pygments. The entire Swift code is provided as a string in the constructor.
     """
 
-    def __init__(self, swift_code: str):
+    def __init__(self, start_ea: int, swift_code: str):
         """
         Initialize the Swift code viewer.`
 
@@ -29,6 +36,7 @@ class SwiftCodeViewer(ida_kernwin.simplecustviewer_t):
             title: Window title for the viewer
         """
         super().__init__()
+        self._start_ea = start_ea
         self._swift_code = swift_code
         self._highlighter = SwiftHighlighter()
 
@@ -47,6 +55,13 @@ class SwiftCodeViewer(ida_kernwin.simplecustviewer_t):
             if not super().Create(title):
                 logger.error("Failed to create simplecustviewer_t")
                 return False
+
+            created_widget = ida_kernwin.PluginForm.TWidgetToPyQtWidget(
+                self.GetWidget()
+            )
+            _setup_tab_icon(created_widget)
+
+            created_widget.setProperty(FUNC_EA_PROPERTY, self._start_ea)
 
             # Add lines with syntax highlighting
             self._add_highlighted_content()
@@ -187,11 +202,9 @@ class SwiftCodeViewer(ida_kernwin.simplecustviewer_t):
         """
         try:
             # Handle Escape key to close viewer
-            if vkey == 27:  # VK_ESCAPE
+            if vkey == 27:  # ESCAPE
                 self.Close()
                 return 1
-
-            # Let the default handler process other keys
             return 0
 
         except Exception as e:
@@ -199,8 +212,27 @@ class SwiftCodeViewer(ida_kernwin.simplecustviewer_t):
             return 0
 
 
+def _setup_tab_icon(created_widget: QWidget):
+    """Setup tab icon"""
+
+    try:
+        icon = _load_swift_icon()
+        if not icon.isNull():
+            created_widget.setWindowIcon(icon)
+        else:
+            logger.warning("Failed to load window icon")
+    except Exception as e:
+        logger.error(f"Error setting window icon: {e}")
+
+
+@cache
+def _load_swift_icon() -> QtGui.QIcon:
+    with importlib.resources.path(assets, "swift.png") as file_path:
+        return QtGui.QIcon(str(file_path))
+
+
 def create_swift_viewer(
-    swift_code: str, title: str = "Swift Code Viewer"
+    start_ea: int, swift_code: str, title: str = "Swift Code Viewer"
 ) -> ty.Optional[SwiftCodeViewer]:
     """
     Convenience function to create and show a Swift code viewer.
@@ -212,7 +244,7 @@ def create_swift_viewer(
     Returns:
         SwiftCodeViewer instance if successful, None otherwise
     """
-    viewer = SwiftCodeViewer(swift_code)
+    viewer = SwiftCodeViewer(start_ea, swift_code)
     if viewer.Create(title):
         return viewer
     else:

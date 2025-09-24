@@ -6,14 +6,23 @@ import anyio
 import structlog
 
 from decompai_client import ApiClient, BinariesApi, UserApi
+from decompai_client.exceptions import ForbiddenException, UnauthorizedException
 from decompai_ida import api, logger
 from decompai_ida.broadcast import Broadcast
-from decompai_ida.configuration import PluginConfiguration
+from decompai_ida.configuration import BadConfigurationFile, PluginConfiguration
 from decompai_ida.events import IdaEvent
 from decompai_ida.model import CopilotModel, Model
 from decompai_ida.wait_box import WaitBox
 
 _T = ty.TypeVar("_T")
+
+_RETRY_SLEEP_INTERVAL_SECONDS = 1
+
+
+class CriticalTaskError(Exception):
+    """Exception raised when a task should stop without retrying."""
+
+    pass
 
 
 @dataclass(frozen=True)
@@ -54,14 +63,30 @@ class TaskContext:
 
 class _BaseTask(ABC):
     async def run(self) -> None:
+        critical_exception_types = (
+            ForbiddenException,
+            UnauthorizedException,
+            BadConfigurationFile,
+            CriticalTaskError,
+        )
+
         with structlog.contextvars.bound_contextvars(task=type(self).__name__):
-            try:
-                await logger.adebug("Task starting")
-                await self._run()
-                await logger.adebug("Task finished with no error")
-            except Exception as ex:
-                await logger.awarning("Task crashed", exc_info=ex)
-                raise
+            while True:
+                try:
+                    await logger.adebug("Task starting")
+                    await self._run()
+                    await logger.adebug("Task finished with no error")
+                    return
+                except critical_exception_types as ex:
+                    await logger.awarning(
+                        "Task crashed", exc_info=ex, will_retry=False
+                    )
+                    raise
+                except Exception as ex:
+                    await logger.awarning(
+                        "Task crashed", exc_info=ex, will_retry=True
+                    )
+                    await anyio.sleep(_RETRY_SLEEP_INTERVAL_SECONDS)
 
     @abstractmethod
     async def _run(self) -> None: ...
@@ -91,8 +116,10 @@ class Task(_BaseTask):
         *,
         description: ty.Optional[str] = None,
         retry_delay: int = 3,
+        max_retries: ty.Optional[int] = None,
     ) -> _T:
         connection_name = type(self).__name__
+        attempts = 0
         while True:
             try:
                 result = await func()
@@ -115,6 +142,9 @@ class Task(_BaseTask):
                         connection_name
                     )
                     self._ctx.model.notify_update()
+                    attempts += 1
+                    if max_retries is not None and attempts >= max_retries:
+                        raise
                     await anyio.sleep(retry_delay)
                 else:
                     raise

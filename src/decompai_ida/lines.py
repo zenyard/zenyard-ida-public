@@ -5,14 +5,14 @@ Helpers to parse `ida_lines` format.
 import re
 import typing as ty
 from dataclasses import dataclass
-from itertools import groupby
+from itertools import groupby, repeat
 
 import ida_hexrays
 import ida_lines
 import ida_name
 import typing_extensions as tye
 from idaapi import BADADDR
-from more_itertools import before_and_after, peekable
+from more_itertools import before_and_after, nth, peekable
 
 from decompai_client import AddressDetail, LVarDetail, Range, RangeDetail
 from decompai_ida import api
@@ -192,3 +192,80 @@ class _FuncLines:
             signature=tuple(signature_lines),
             body=tuple(body_lines),
         )
+
+
+def get_line_ids(
+    cfunc: ida_hexrays.cfunc_t,
+) -> ty.Iterator[str]:
+    """
+    Yield stable IDs
+    """
+    item = ida_hexrays.ctree_item_t()
+    sv_lines = list(cfunc.get_pseudocode())
+
+    yield from repeat("header", cfunc.hdrlines)
+    pending = 0
+    for sv_line in sv_lines[cfunc.hdrlines :]:
+        cfunc.get_line_item(
+            sv_line.line,
+            0,
+            True,
+            None,  # type: ignore
+            None,  # type: ignore
+            item,
+        )
+        if item.citype == ida_hexrays.VDI_TAIL and (
+            item.loc.itp > ida_hexrays.ITP_INNER_LAST  # type: ignore
+        ):
+            loc = item.loc  # type: ignore
+            yield from repeat(
+                f"{loc.ea:x}-{loc.itp:x}",
+                pending + 1,
+            )
+            pending = 0
+        else:
+            pending += 1
+    yield from repeat("tail", pending)
+
+
+def line_id_to_index(
+    cfunc: ida_hexrays.cfunc_t, stable_id: str
+) -> ty.Optional[int]:
+    """
+    Given a stable ID, return the first current (0-based) line number, or None.
+    """
+    for i, line_id in enumerate(get_line_ids(cfunc)):
+        if line_id == stable_id:
+            return i
+    return None
+
+
+def line_index_to_id(
+    cfunc: ida_hexrays.cfunc_t, index: int
+) -> ty.Optional[str]:
+    """
+    Given a current (0-based) line number, return its stable ID, or None.
+    """
+    return nth(get_line_ids(cfunc), index)
+
+
+def get_line_addresses(
+    cfunc: ida_hexrays.cfunc_t,
+) -> ty.Iterator[int]:
+    """
+    Yield address per pseudocode line
+    """
+    item = ida_hexrays.ctree_item_t()
+    sv_lines = list(cfunc.get_pseudocode())
+
+    yield from repeat(cfunc.entry_ea, cfunc.hdrlines)
+    for sv_line in sv_lines[cfunc.hdrlines :]:
+        cfunc.get_line_item(
+            sv_line.line,
+            0,
+            True,
+            None,  # type: ignore
+            None,  # type: ignore
+            item,
+        )
+        yield item.loc.ea  # type: ignore

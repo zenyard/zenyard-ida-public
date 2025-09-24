@@ -212,6 +212,11 @@ class AddressMultiMap(ty.Generic[_T]):
     async def clear_address(self, address: int):
         await ida_tasks.run(self.clear_address_sync, address)
 
+    async def clear(self):
+        await self._index_storage.clear()
+        await self._heads_storage.clear()
+        await ida_tasks.run(self._items_storage.clear)
+
 
 class AddressRelation:
     """
@@ -248,6 +253,10 @@ class AddressRelation:
             self._right_map.clear_address_sync(right)
             for left in lefts:
                 self._right_map.push_sync(right, left)
+
+    async def clear(self):
+        await self._left_map.clear()
+        await self._right_map.clear()
 
 
 class _QueueState(pydantic.BaseModel):
