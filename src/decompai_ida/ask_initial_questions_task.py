@@ -73,7 +73,7 @@ class AskInitialQuestions(Task):
                 form_result = _Accepted(automatically_save_results=True)
 
             if isinstance(form_result, _Accepted):
-                if self._ctx.plugin_config.ask_for_binary_instructions:
+                if self._ctx.plugin_config.request_binary_instructions:
                     binary_instructions = await _ask_for_binary_instructions()
 
                 self._ctx.model.runtime_status.queue_foreground_task_if_not_already_queued(
