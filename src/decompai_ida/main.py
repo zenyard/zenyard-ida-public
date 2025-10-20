@@ -1,9 +1,11 @@
+import time
 import typing as ty
 
 import anyio
+import ida_idp
+import ida_kernwin
 from decompai_ida.copilot_task import CopilotTask
 import exceptiongroup
-from anyio.abc import ObjectReceiveStream
 
 from decompai_client import BinariesApi, UserApi
 from decompai_client.exceptions import ForbiddenException, UnauthorizedException
@@ -25,12 +27,7 @@ from decompai_ida.broadcast_ida_events_task import (
     BroadcastIdaEventsTask,
 )
 from decompai_ida.download_inferences_task import DownloadInferencesTask
-from decompai_ida.events import (
-    DatabaseClosed,
-    DatabaseOpened,
-    EventRecorder,
-    IdaEvent,
-)
+from decompai_ida.events import DatabaseOpened, EventRecorder, IdaEvent
 from decompai_ida.fetch_user_config_task import FetchUserConfigTask
 from decompai_ida.ask_initial_questions_task import AskInitialQuestions
 from decompai_ida.model import CopilotModel, Model
@@ -119,27 +116,78 @@ _ACTIVE_TASKS: ty.Collection[type[Task]] = (
     UploadRevisionsTask,
 )
 
-_stop: ty.Callable[[bool], None] = lambda _: None  # noqa: E731
+_stop: ty.Optional[ty.Callable[[bool], None]] = None
+_stop_db_tasks: ty.Optional[ty.Callable[[], None]] = None
 
 
-def stop(restart=False):
+def stop(*, restart=False, wait=False):
     "Stop the plugin for this IDA session"
-    _stop(restart)
+
+    stop_callback = _stop
+    if stop_callback is None:
+        return
+
+    stop_callback(restart)
+
+    if not restart and wait:
+        while _stop is not None:
+            ida_tasks.execute_queued_tasks_sync()
+            time.sleep(0.05)
+        ida_tasks.execute_queued_tasks_sync()
+
+
+def stop_db_tasks():
+    stop_callback = _stop_db_tasks
+    if stop_callback is None:
+        return
+
+    stop_callback()
+    while _stop_db_tasks is not None:
+        ida_tasks.execute_queued_tasks_sync()
+        time.sleep(0.05)
+    ida_tasks.execute_queued_tasks_sync()
+
+
+class _StopDbTasksOnHexraysUnload(ida_kernwin.UI_Hooks):
+    # Comparing with the UI label of the plugin. Note that non-UI identifiers
+    # changes between architectures (e.g. `hexx64` and `hexarm`).
+    _HEXRAYS_ORG_NAMES = {"Hex-Rays Decompiler", "Hex-Rays Cloud Decompiler"}
+
+    def plugin_unloading(self, plugin_info):
+        if plugin_info.org_name in self._HEXRAYS_ORG_NAMES:
+            logger.info(
+                "Stopping DB tasks because HexRays plugin unloaded",
+                plugin_id=plugin_info.idaplg_name,
+                plugin_label=plugin_info.org_name,
+            )
+            stop_db_tasks()
+
+            # HexRays hooks must be removed before continuing to avoid crash.
+            ida_tasks.unhook_all_hexrays_sync()
+
+        return super().plugin_unloading(plugin_info)
+
+
+class _StopDbTasksOnCloseHook(ida_idp.IDB_Hooks):
+    def closebase(self, /):
+        stop_db_tasks()
+        return super().closebase()
 
 
 async def main():
+    # Warning - don't add any awaits before assigning `_stop` to allow early
+    # cancellation.
+
     global _stop
     ida_tasks.AsyncCallback.set_event_loop()
     should_restart = True
 
     while should_restart:
         should_restart = False
-
         try:
             async with (
                 # Open TaskGroup first to wrap all exceptions with ExceptiopGroup
                 anyio.create_task_group() as tg,
-                api.open_api_client() as api_client,
             ):
 
                 def stop(restart: bool):
@@ -149,17 +197,18 @@ async def main():
 
                 _stop = ida_tasks.AsyncCallback(stop)
 
-                ida_events = Broadcast[IdaEvent](EventRecorder())
-                global_context = GlobalTaskContext(
-                    ida_events=ida_events,
-                    static_config=_STATIC_CONFIG,
-                    api_client=api_client,
-                )
+                async with api.open_api_client() as api_client:
+                    ida_events = Broadcast[IdaEvent](EventRecorder())
+                    global_context = GlobalTaskContext(
+                        ida_events=ida_events,
+                        static_config=_STATIC_CONFIG,
+                        api_client=api_client,
+                    )
 
-                for global_task_type in _GLOBAL_TASKS:
-                    tg.start_soon(global_task_type(global_context).run)
+                    for global_task_type in _GLOBAL_TASKS:
+                        tg.start_soon(global_task_type(global_context).run)
 
-                await _spawn_tasks_when_db_opens(global_context)
+                    await _spawn_tasks_when_db_opens(global_context)
 
         except exceptiongroup.ExceptionGroup as ex:
             config_path = await ida_tasks.run(
@@ -172,26 +221,28 @@ async def main():
                 exceptiongroup.print_exception(ex)
 
         finally:
-            _stop = lambda _: None  # noqa: E731
+            _stop = None
 
 
 async def _spawn_tasks_when_db_opens(global_context: GlobalTaskContext):
+    global _stop_db_tasks
+
     async with global_context.ida_events.subscribe() as event_receiver:
         while True:
             await wait_for_object_of_type(event_receiver, DatabaseOpened)
 
-            async with anyio.create_task_group() as tg:
-                tg.start_soon(
-                    _cancel_on_database_close, event_receiver, tg.cancel_scope
-                )
-                await _spawn_tasks(global_context)
-
-
-async def _cancel_on_database_close(
-    event_receiver: ObjectReceiveStream[IdaEvent], scope: anyio.CancelScope
-):
-    await wait_for_object_of_type(event_receiver, DatabaseClosed)
-    scope.cancel()
+            try:
+                async with anyio.create_task_group() as tg:
+                    _stop_db_tasks = ida_tasks.AsyncCallback(
+                        tg.cancel_scope.cancel
+                    )
+                    async with (
+                        ida_tasks.install_hooks(_StopDbTasksOnCloseHook()),
+                        ida_tasks.install_hooks(_StopDbTasksOnHexraysUnload()),
+                    ):
+                        await _spawn_tasks(global_context)
+            finally:
+                _stop_db_tasks = None
 
 
 async def _spawn_tasks(global_context: GlobalTaskContext):

@@ -1,3 +1,10 @@
+# Must be done before any import Qt
+# No-op condition to stop formatters from reorganizing imports
+if True:
+    from decompai_ida.ui.setup_qt import setup_qt_sync
+
+    setup_qt_sync()
+
 from threading import Thread
 
 import anyio
@@ -36,9 +43,12 @@ class DecompaiPlugmod(ida_idaapi.plugmod_t):
             stop(restart=True)
 
     def __del__(self):
+        # We must wait to allow thread to fully shut down, as IDA is about to
+        # close and cleanup may require IDA API.
+        stop(wait=True)
+
         # Hooks must be immediately removed to avoid crash.
         ida_tasks.unhook_all_sync()
-        stop()
 
 
 def main_loop():

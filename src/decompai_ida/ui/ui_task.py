@@ -2,7 +2,7 @@ import typing as ty
 from contextlib import asynccontextmanager
 
 import anyio
-from PyQt5.QtWidgets import QApplication, QMainWindow, QStatusBar
+from qtpy.QtWidgets import QApplication, QMainWindow
 
 from decompai_ida import ida_tasks, logger
 from decompai_ida.apply_inferences_task import ApplyInferencesTask
@@ -42,14 +42,14 @@ class UiTask(Task):
         )
 
         def setup_sync():
-            status_bar = _find_status_bar_sync()
+            main_window = _find_main_window()
             widget = StatusBarWidget(view_model)
             widget.upload_clicked.connect(upload_callback)
             widget.save_results_clicked.connect(save_results_callback)
-            status_bar.addPermanentWidget(widget)
-            return status_bar, widget
+            main_window.statusBar().addPermanentWidget(widget)
+            return main_window, widget
 
-        status_bar, widget = await ida_tasks.run_ui(setup_sync)
+        main_window, widget = await ida_tasks.run_ui(setup_sync)
 
         try:
             _current_widget = widget
@@ -57,7 +57,9 @@ class UiTask(Task):
         finally:
             _current_widget = None
             with anyio.CancelScope(shield=True):
-                await ida_tasks.run_ui(status_bar.removeWidget, widget)
+                await ida_tasks.run_ui(
+                    lambda: main_window.statusBar().removeWidget(widget)
+                )
 
     async def _on_upload_clicked(self):
         await logger.get().ainfo("Upload requested")
@@ -74,8 +76,8 @@ class UiTask(Task):
         self._ctx.model.notify_update()
 
 
-def _find_status_bar_sync() -> QStatusBar:
+def _find_main_window() -> QMainWindow:
     for widget in QApplication.topLevelWidgets():
         if isinstance(widget, QMainWindow):
-            return widget.statusBar()
-    raise Exception("Can't find status bar")
+            return widget
+    raise Exception("Can't find main window")

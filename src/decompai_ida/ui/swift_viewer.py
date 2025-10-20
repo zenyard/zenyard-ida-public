@@ -5,8 +5,8 @@ from itertools import chain
 import ida_kernwin
 import ida_lines
 import importlib.resources
-from PyQt5 import QtGui
-from PyQt5.QtWidgets import QWidget
+from qtpy import QtGui
+from qtpy.QtWidgets import QWidget
 
 from decompai_ida import assets
 from decompai_ida import logger

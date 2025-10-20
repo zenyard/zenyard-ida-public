@@ -3,6 +3,7 @@
 
 import base64
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -68,13 +69,23 @@ def main():
         run_in_ui(lambda: ida_kernwin.warning(message))
 
 
+_IDA_VERSION_PATTERN = re.compile(r"^(\d+)\.(\d+)")
+
+
+def get_ida_version() -> tuple[int, int]:
+    ida_version = run_in_ui(ida_kernwin.get_kernel_version)
+    m = _IDA_VERSION_PATTERN.match(ida_version)
+    if m is None:
+        raise Exception("Can't parse IDA version")
+    return (int(m.group(1)), int(m.group(2)))
+
+
 def check_prerequisites():
     if sys.version_info < (3, 10):
         raise Exception(f"Python 3.10 or higher required, got {sys.version}")
 
-    ida_version = run_in_ui(ida_kernwin.get_kernel_version)
-    ida_major = int(ida_version.split(".")[0])
-    if ida_major < 9:
+    ida_version = get_ida_version()
+    if ida_version < (9, 0):
         raise Exception("IDA 9.0 or higher required")
 
     if shutil.which("git") is None:
@@ -86,16 +97,24 @@ def check_prerequisites():
         raise Exception("Pip is required for installation")
 
     try:
-        # IDA ships with PyQt5 version per Python release. Not being able to
-        # import PyQt5 is a sign of IDA being incompatible with Python.
-        from PyQt5.QtCore import Qt  # noqa: F401
-        from PyQt5.QtGui import QPixmap  # noqa: F401
-        from PyQt5.QtWidgets import QApplication  # noqa: F401
+
+        def import_qt():
+            if ida_version >= (9, 2):
+                from PySide6 import QtWidgets as QtWidgets  # type: ignore
+                from PySide6 import QtCore as QtCore  # type: ignore
+                from PySide6 import QtGui as QtGui  # type: ignore
+            else:
+                from PyQt5.QtCore import Qt as Qt  # type: ignore
+                from PyQt5.QtGui import QPixmap as QPixmap  # type: ignore
+                from PyQt5.QtWidgets import QApplication as QApplication  # type: ignore
+
+        run_in_ui(import_qt)
+
     except ImportError:
         py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
 
         raise Exception(
-            f"IDA {ida_version} isn't compatible with Python {py_version}. "
+            f"IDA {ida_version[0]}.{ida_version[1]} isn't compatible with Python {py_version}. "
             "Please upgrade IDA or downgrade Python."
         )
 

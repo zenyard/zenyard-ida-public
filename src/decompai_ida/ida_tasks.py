@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import threading
 
 import anyio
+import ida_hexrays
 import ida_kernwin
 import typing_extensions as tye
 
@@ -61,15 +62,19 @@ def execute_queued_tasks_sync():
     """
     global _queued_tasks
 
-    with _queued_tasks_lock:
-        taken_tasks = _queued_tasks
-        _queued_tasks = {}
+    while True:
+        with _queued_tasks_lock:
+            taken_tasks = _queued_tasks
+            _queued_tasks = {}
 
-    for queud_task in taken_tasks:
-        try:
-            queud_task()
-        except Exception as ex:
-            logger.warning("Queued task failed", exc_info=ex)
+        if len(taken_tasks) == 0:
+            break
+
+        for queud_task in taken_tasks:
+            try:
+                queud_task()
+            except Exception as ex:
+                logger.warning("Queued task failed", exc_info=ex)
 
 
 def _queue_task(func: ty.Callable):
@@ -205,6 +210,10 @@ async def install_hooks(hooks: _Hooks):
     try:
         yield
     finally:
+        if hooks not in _all_hooks:
+            # Already uninstalled via `unhook_all...`
+            return
+
         with anyio.CancelScope(shield=True):
             success = await run_ui(hooks.unhook)
             if not success:
@@ -212,6 +221,18 @@ async def install_hooks(hooks: _Hooks):
             if hooks in _all_hooks:
                 _all_hooks.remove(hooks)
             await log.ainfo("Hooks uninstalled")
+
+
+def unhook_all_hexrays_sync():
+    hexrays_hooks = [
+        hooks
+        for hooks in _all_hooks
+        if isinstance(hooks, ida_hexrays.Hexrays_Hooks)
+    ]
+
+    for hooks in hexrays_hooks:
+        hooks.unhook()
+        _all_hooks.remove(hooks)
 
 
 def unhook_all_sync():

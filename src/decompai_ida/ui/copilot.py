@@ -2,8 +2,8 @@ import importlib.resources
 import typing as ty
 import typing_extensions as tye
 from dataclasses import dataclass
-from PyQt5 import QtWidgets, QtGui, QtCore
-from PyQt5.QtCore import pyqtSignal
+from qtpy import QtWidgets, QtGui, QtCore
+from qtpy.QtCore import QObject, Signal, Slot
 from decompai_ida import logger
 import ida_kernwin
 import ida_name
@@ -78,8 +78,8 @@ class CopilotViewModel(QtCore.QObject):
     """
 
     # Qt signals for UI updates
-    messages_changed = pyqtSignal(list)  # list[Message]
-    copilot_active_changed = pyqtSignal(bool)
+    messages_changed = Signal(list)  # list[Message]
+    copilot_active_changed = Signal(bool)
 
     def __init__(self, copilot_model: "CopilotModel", parent=None):
         super().__init__(parent)
@@ -222,7 +222,7 @@ def _get_message_sender(message: Message) -> str:
 class UserTextInput(QtWidgets.QTextEdit):
     """Multi-line text input widget with auto-sizing and message sending."""
 
-    message_sent = pyqtSignal(Message)
+    message_sent = Signal(Message)
 
     def __init__(
         self,
@@ -315,9 +315,9 @@ class UserTextInput(QtWidgets.QTextEdit):
 class UserInputPanel(QtWidgets.QWidget):
     """Panel containing send/stop and clear conversation buttons."""
 
-    send_requested = pyqtSignal()
-    stop_requested = pyqtSignal()
-    clear_requested = pyqtSignal()
+    send_requested = Signal()
+    stop_requested = Signal()
+    clear_requested = Signal()
 
     def __init__(self, parent=None, in_progress=False):
         super().__init__(parent)
@@ -402,9 +402,9 @@ class UserInputPanel(QtWidgets.QWidget):
 class UserInput(QtWidgets.QFrame):
     """Combined user input widget with text field and control buttons."""
 
-    message_sent = pyqtSignal(Message)
-    stop_requested = pyqtSignal()
-    clear_requested = pyqtSignal()
+    message_sent = Signal(Message)
+    stop_requested = Signal()
+    clear_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -482,9 +482,9 @@ class UserInput(QtWidgets.QFrame):
 class CopilotChat(QtWidgets.QWidget):
     """Main chat widget combining display and input components."""
 
-    message_sent = pyqtSignal(Message)
-    stop_requested = pyqtSignal()
-    clear_requested = pyqtSignal()
+    message_sent = Signal(Message)
+    stop_requested = Signal()
+    clear_requested = Signal()
 
     def __init__(self):
         super().__init__()
@@ -537,16 +537,51 @@ class CopilotChat(QtWidgets.QWidget):
             logger.error(f"Error setting chat input focus: {e}")
 
 
+class CopilotViewModelReceiver(QObject):
+    def __init__(
+        self, *, copilot_chat: CopilotChat, view_model: CopilotViewModel
+    ) -> None:
+        super().__init__()
+        self._copilot_chat = copilot_chat
+        self._view_model = view_model
+
+    @Slot(list)
+    def _update_messages(self, messages: ty.List[Message]):
+        """Update the chat display with new messages."""
+        try:
+            chat_state = ChatState(messages=messages, in_progress=False)
+            self._copilot_chat.set_state(chat_state)
+        except Exception as e:
+            logger.error(f"Error updating messages: {e}")
+
+    @Slot(bool)
+    def _update_active_state(self, is_active: bool):
+        """Update the UI based on copilot active state."""
+        try:
+            # Update the in_progress state which controls UI disable/enable
+            current_messages = (
+                self._view_model.get_messages() if self._view_model else []
+            )
+            chat_state = ChatState(
+                messages=current_messages, in_progress=is_active
+            )
+            self._copilot_chat.set_state(chat_state)
+        except Exception as e:
+            logger.error(f"Error updating active state: {e}")
+
+
 class CopilotWindow(ida_kernwin.PluginForm):
     """IDA Pro plugin form for the Copilot chat interface."""
 
     _view_model: CopilotViewModel
+    _view_model_receiver: ty.Optional[CopilotViewModelReceiver]
     copilot_chat: ty.Optional[CopilotChat]
 
     def __init__(self, view_model: CopilotViewModel):
         super().__init__()
         self._view_model = view_model
-        self.copilot_chat = None
+        self._copilot_chat = None
+        self._receiver = None
 
     def OnCreate(self, form):  # type: ignore[override]
         """Initialize the chat window when created by IDA."""
@@ -578,9 +613,9 @@ class CopilotWindow(ida_kernwin.PluginForm):
         """Setup the main window layout."""
         try:
             layout = QtWidgets.QVBoxLayout()
-            self.copilot_chat = CopilotChat()
+            self._copilot_chat = CopilotChat()
 
-            layout.addWidget(self.copilot_chat)
+            layout.addWidget(self._copilot_chat)
             layout.setContentsMargins(
                 LAYOUT_SPACING, LAYOUT_SPACING, LAYOUT_SPACING, LAYOUT_SPACING
             )
@@ -592,65 +627,47 @@ class CopilotWindow(ida_kernwin.PluginForm):
 
     def input_focus(self):
         """Set focus to the chat input field."""
-        if self.copilot_chat is None:
-            return
+        assert self._copilot_chat is not None
         try:
-            self.copilot_chat.input_focus()
+            self._copilot_chat.input_focus()
         except Exception as e:
             logger.error(f"Error setting chat window input focus: {e}")
 
     def _connect_view_model(self):
         """Connect the view model to the UI components."""
-        if self.copilot_chat is None:
-            return
+        assert self._copilot_chat is not None
+        self._view_model_receiver = CopilotViewModelReceiver(
+            copilot_chat=self._copilot_chat,
+            view_model=self._view_model,
+        )
         try:
             # Connect UI signals to view model methods
-            self.copilot_chat.message_sent.connect(
+            self._copilot_chat.message_sent.connect(
                 AsyncCallback(self._view_model.add_message)
             )
 
-            self.copilot_chat.stop_requested.connect(
+            self._copilot_chat.stop_requested.connect(
                 AsyncCallback(self._view_model.request_stop)
             )
-            self.copilot_chat.clear_requested.connect(
+            self._copilot_chat.clear_requested.connect(
                 AsyncCallback(self._view_model.clear_conversation)
             )
 
             # Connect view model signals to UI updates
-            self._view_model.messages_changed.connect(self._update_messages)
+            self._view_model.messages_changed.connect(
+                self._view_model_receiver._update_messages
+            )
             self._view_model.copilot_active_changed.connect(
-                self._update_active_state
+                self._view_model_receiver._update_active_state
             )
 
             # Initialize with current state
-            self._update_messages(self._view_model.get_messages())
-            self._update_active_state(self._view_model.is_copilot_active())
+            self._view_model_receiver._update_messages(
+                self._view_model.get_messages()
+            )
+            self._view_model_receiver._update_active_state(
+                self._view_model.is_copilot_active()
+            )
 
         except Exception as e:
             logger.error(f"Error connecting view model: {e}")
-
-    def _update_messages(self, messages: ty.List[Message]):
-        """Update the chat display with new messages."""
-        if self.copilot_chat is None:
-            return
-        try:
-            chat_state = ChatState(messages=messages, in_progress=False)
-            self.copilot_chat.set_state(chat_state)
-        except Exception as e:
-            logger.error(f"Error updating messages: {e}")
-
-    def _update_active_state(self, is_active: bool):
-        """Update the UI based on copilot active state."""
-        if self.copilot_chat is None:
-            return
-        try:
-            # Update the in_progress state which controls UI disable/enable
-            current_messages = (
-                self._view_model.get_messages() if self._view_model else []
-            )
-            chat_state = ChatState(
-                messages=current_messages, in_progress=is_active
-            )
-            self.copilot_chat.set_state(chat_state)
-        except Exception as e:
-            logger.error(f"Error updating active state: {e}")

@@ -3,7 +3,7 @@ import math
 import time
 import typing as ty
 
-from PyQt5.QtCore import QObject, pyqtSignal
+from qtpy.QtCore import QObject, Signal
 
 from decompai_ida import ida_tasks
 from decompai_ida.model import Model, TaskName
@@ -21,14 +21,14 @@ class StatusBarViewModel(QObject):
     Supplies UI with details from model.
     """
 
-    status_line = pyqtSignal(str)
-    results_available = pyqtSignal(bool)
-    upload_available = pyqtSignal(bool)
-    disconnected_icon_visible = pyqtSignal(bool)
-    progress_bar_visible = pyqtSignal(bool)
-    progress_bar_range = pyqtSignal(int, int)
-    progress_bar_value = pyqtSignal(int)
-    swift_source_available_icon_visible = pyqtSignal(bool)
+    status_line = Signal(str)
+    results_available = Signal(bool)
+    upload_available = Signal(bool)
+    disconnected_icon_visible = Signal(bool)
+    progress_bar_visible = Signal(bool)
+    progress_bar_range = Signal(int, int)
+    progress_bar_value = Signal(int)
+    swift_source_available_icon_visible = Signal(bool)
 
     def __init__(self, model: Model):
         super().__init__()

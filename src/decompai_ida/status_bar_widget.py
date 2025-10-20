@@ -1,9 +1,9 @@
 import importlib.resources
 
-from PyQt5 import QtGui
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QPixmap
-from PyQt5.QtWidgets import (
+from qtpy import QtGui
+from qtpy.QtCore import Qt, Signal
+from qtpy.QtGui import QPixmap
+from qtpy.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QProgressBar,
@@ -15,8 +15,8 @@ from decompai_ida.ui.status_bar_view_model import StatusBarViewModel
 
 
 class StatusBarWidget(QWidget):
-    save_results_clicked = pyqtSignal()
-    upload_clicked = pyqtSignal()
+    save_results_clicked = Signal()
+    upload_clicked = Signal()
 
     def __init__(self, view_model: StatusBarViewModel):
         super().__init__()
@@ -107,7 +107,7 @@ class StatusBarWidget(QWidget):
 
 
 class _ClickableLabel(QLabel):
-    clicked = pyqtSignal()
+    clicked = Signal()
 
     def mousePressEvent(self, ev: QtGui.QMouseEvent) -> None:
         if ev.button() == Qt.LeftButton:
