@@ -35,7 +35,8 @@ class RegisterBinaryTask(Task):
 
         await logger.adebug("Waiting for auto analysis")
         await self._ctx.model.wait_for_initial_analysis()
-        await logger.adebug("Waiting for initial questions to be answered")
+
+        await logger.adebug("Waiting for initial questions")
         await self._ctx.model.wait_for_initial_questions()
 
         await logger.adebug("Registering binary")

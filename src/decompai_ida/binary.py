@@ -63,17 +63,33 @@ def is_idb_open_sync() -> bool:
 class InputFile:
     name: str
     data: bytes
+    type: str
+
+
+def _get_file_type_sync() -> str:
+    """
+    Returns the IDA file type name.
+    """
+    return ida_loader.get_file_type_name()
 
 
 async def read_compressed_input_file() -> InputFile:
+    # Check if it's an Apple dyld cache
+    file_type = await ida_tasks.run(_get_file_type_sync)
+    if file_type.lower().startswith("apple dyld cache"):
+        # For dyld cache, return empty data
+        return InputFile(name="dyld", data=b"", type="dyld")
+
     # Prefer original binary
     input_path = anyio.Path(await ida_tasks.run(get_binary_path_sync))
     name = "binary.gz"
+    file_type_str = "binary"
 
     if not await input_path.exists():
         # Fallback to IDB
         input_path = anyio.Path(await ida_tasks.run(get_idb_path_sync))
         name = "idb.gz"
+        file_type_str = "idb"
 
     if not await input_path.exists():
         # Give up
@@ -84,7 +100,7 @@ async def read_compressed_input_file() -> InputFile:
             _compress_gzip, input_file.wrapped, abandon_on_cancel=True
         )
 
-    return InputFile(name=name, data=data)
+    return InputFile(name=name, data=data, type=file_type_str)
 
 
 def _compress_gzip(file_obj: ty.IO[bytes]) -> bytes:

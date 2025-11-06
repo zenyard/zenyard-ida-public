@@ -243,6 +243,7 @@ def unhook_all_sync():
 
 @asynccontextmanager
 async def install_action(
+    *,
     action_id: str,
     label: str,
     handler: ida_kernwin.action_handler_t,

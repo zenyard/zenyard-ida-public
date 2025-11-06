@@ -14,11 +14,20 @@ from decompai_ida.async_utils import wait_until_cancelled
 from decompai_ida.model import Model
 from decompai_ida.swift_utils import find_latest_swift_function_inference_sync
 from decompai_ida.tasks import Task, TaskContext
-from decompai_ida.ui.swift_viewer import FUNC_EA_PROPERTY, create_swift_viewer
+from decompai_ida.ui.swift_speculation_hints_hook import (
+    SwiftSpeculationHintsHook,
+)
+from decompai_ida.ui.swift_viewer import (
+    FUNC_EA_PROPERTY,
+    SwiftCodeViewer,
+    create_swift_viewer,
+)
 from decompai_client.models.swift_function import SwiftFunction
 
 OPEN_SWIFT_GLOW_ACTION_ID = "zenyard:open_swift_glow"
+OPEN_SWIFT_GLOW_NEW_TAB_ACTION_ID = "zenyard:open_swift_glow_new_tab"
 JUMP_SWIFT_GLOW_ACTION_ID = "zenyard:jump_swift_glow"
+SWIFT_GLOW_TITLE = "Zenyard SwiftGlow"
 
 
 class OpenSwiftActionHandler(ida_kernwin.action_handler_t):
@@ -26,6 +35,7 @@ class OpenSwiftActionHandler(ida_kernwin.action_handler_t):
 
     _swiftglow_enabled: bool
     _model: Model
+    _shared_swift_viewer: ty.Optional[SwiftCodeViewer]
 
     def __init__(
         self,
@@ -35,6 +45,7 @@ class OpenSwiftActionHandler(ida_kernwin.action_handler_t):
         super().__init__()
         self._swiftglow_enabled = swiftglow_enabled
         self._model = model
+        self._shared_swift_viewer = None
 
     def activate(self, ctx):  # type: ignore
         """Handle action activation - open swift glow window."""
@@ -57,16 +68,21 @@ class OpenSwiftActionHandler(ida_kernwin.action_handler_t):
             else:
                 swift_line_number = 1
 
-            for i in count(1):
-                swift_viewer = create_swift_viewer(
-                    ctx.cur_func.start_ea,
-                    swift_function.source,
-                    title=f"Swift-{i}",
-                )
-                if swift_viewer is not None:
-                    swift_viewer.Jump(swift_line_number - 1, 0, 0)
-                    swift_viewer.Show()
-                    break
+            action_id = getattr(ctx, "action", None)
+            if action_id == OPEN_SWIFT_GLOW_NEW_TAB_ACTION_ID:
+                viewer = self._get_new_tab_viewer()
+            else:
+                viewer = self._get_reused_viewer()
+
+            if viewer is None:
+                return 1
+
+            viewer.update_content(
+                start_ea=ctx.cur_func.start_ea,
+                swift_function=swift_function,
+            )
+            viewer.Jump(swift_line_number - 1, 0, 0)
+            viewer.Show()
         except Exception as e:
             logger.error(f"Error opening swift glow: {e}")
         return 1
@@ -77,6 +93,38 @@ class OpenSwiftActionHandler(ida_kernwin.action_handler_t):
             return ida_kernwin.AST_ENABLE
         else:
             return ida_kernwin.AST_DISABLE
+
+    def _get_reused_viewer(self) -> ty.Optional[SwiftCodeViewer]:
+        viewer = self._shared_swift_viewer
+        if viewer is None or not self._is_viewer_available(viewer):
+            self._shared_swift_viewer = None
+            viewer = create_swift_viewer(title=SWIFT_GLOW_TITLE)
+            if viewer is None:
+                return None
+            self._shared_swift_viewer = viewer
+        return viewer
+
+    def _get_new_tab_viewer(self) -> ty.Optional[SwiftCodeViewer]:
+        for index in count(1):
+            title = f"{SWIFT_GLOW_TITLE}-{index}"
+            if ida_kernwin.find_widget(title) is not None:
+                continue
+
+            swift_viewer = create_swift_viewer(title=title)
+            if swift_viewer is None:
+                return None
+
+            return swift_viewer
+        return None
+
+    def _is_viewer_available(self, viewer: SwiftCodeViewer) -> bool:
+        if viewer.GetWidget() is None:
+            return False
+
+        if ida_kernwin.find_widget(SWIFT_GLOW_TITLE) is None:
+            return False
+
+        return True
 
 
 class JumpToPseudocodeActionHandler(ida_kernwin.action_handler_t):
@@ -196,17 +244,33 @@ class SwiftUiTask(Task):
             swiftglow_enabled, self._ctx.model
         )
 
-        async with ida_tasks.install_action(
-            OPEN_SWIFT_GLOW_ACTION_ID,
-            "Open Swift Glow",
-            self._open_swift_action_handler,
-            "Ctrl+Alt+S",
-            "Open Zenyard's Swift Glow",
+        async with (
+            ida_tasks.install_action(
+                action_id=OPEN_SWIFT_GLOW_ACTION_ID,
+                label="Open SwiftGlow",
+                handler=self._open_swift_action_handler,
+                shortcut="Ctrl+Alt+S",
+                tooltip="Open Zenyard's SwiftGlow",
+            ),
+            ida_tasks.install_action(
+                action_id=OPEN_SWIFT_GLOW_NEW_TAB_ACTION_ID,
+                label="Open SwiftGlow in New Tab",
+                handler=self._open_swift_action_handler,
+                tooltip="Open Zenyard's SwiftGlow in a new viewer tab",
+            ),
         ):
-            # Attach to menu
             await ida_tasks.run_ui(
                 lambda: ida_kernwin.attach_action_to_menu(
-                    "Zenyard", OPEN_SWIFT_GLOW_ACTION_ID, 0
+                    "Zenyard/Open Copilot",
+                    OPEN_SWIFT_GLOW_NEW_TAB_ACTION_ID,
+                    ida_kernwin.SETMENU_APP,
+                )
+            )
+            await ida_tasks.run_ui(
+                lambda: ida_kernwin.attach_action_to_menu(
+                    "Zenyard/Open Copilot",
+                    OPEN_SWIFT_GLOW_ACTION_ID,
+                    ida_kernwin.SETMENU_APP,
                 )
             )
 
@@ -225,13 +289,16 @@ class SwiftUiTask(Task):
 
             async with (
                 ida_tasks.install_action(
-                    JUMP_SWIFT_GLOW_ACTION_ID,
-                    "Jump Swift Glow",
-                    self._jump_to_pseudocode_action_handler,
-                    "Tab",
+                    action_id=JUMP_SWIFT_GLOW_ACTION_ID,
+                    label="Jump SwiftGlow",
+                    handler=self._jump_to_pseudocode_action_handler,
+                    shortcut="Tab",
                 ),
                 ida_tasks.install_hooks(
                     SwiftCodeAvailabilityHook(self._ctx.model)
+                ),
+                ida_tasks.install_hooks(
+                    SwiftSpeculationHintsHook(self._ctx.model)
                 ),
             ):
                 await wait_until_cancelled()

@@ -107,10 +107,23 @@ def all_object_symbols_sync() -> ty.Iterator[Symbol]:
         )
     ) != BADADDR:
         name = ida_name.get_name(current_address)
+        addr_flags = ida_bytes.get_flags(current_address)
+
+        # Include unnamed global variables that are referenced from code
         # TODO: Currently after first inference, a global variable is no longer uploaded
         if not ida_name.is_uname(name) and any(
             ida_funcs.get_func(xref.frm) is not None  # type: ignore
             for xref in idautils.XrefsTo(current_address)
+        ):
+            yield Symbol(current_address, "global_variable")
+
+        # Include named global variables, excluding auto-generated string literals
+        elif ida_name.is_uname(name) and not (
+            ida_bytes.is_strlit(addr_flags)
+            and ida_bytes.has_auto_name(addr_flags)
+            # TODO: This is potentially not true. auto generated strings prefix can be
+            # changed through General > Strings > Prefix
+            and name.startswith("a")
         ):
             yield Symbol(current_address, "global_variable")
 
@@ -141,6 +154,7 @@ def read_object_sync(
             address=api.format_address(address),
             name=name,
             has_known_name=has_known_name,
+            mangled_name=ida_name.get_name(address) if has_known_name else None,
             inference_seq_number=inference_seq_number,
             uses=_get_accesses(address),
         )
@@ -201,6 +215,7 @@ def read_object_sync(
                 name=name,
                 code=str(decompiled),
                 calls=_get_calls(address),
+                data_refs_to=_get_data_refs_to(address),
                 has_known_name=has_known_name,
                 ranges=list(lines.get_ranges_sync(decompiled)),
                 inference_seq_number=inference_seq_number,
@@ -281,9 +296,20 @@ def _get_inference_seq_number(model: Model) -> ty.Optional[int]:
 def _get_calls(address: int) -> list[str]:
     results = set[int]()
     for item in idautils.FuncItems(address):
+        # All function code refs
         for code_ref in idautils.CodeRefsFrom(item, flow=False):
             func = ida_funcs.get_func(code_ref)
             if func is None or func.start_ea == address:
+                continue
+            results.add(func.start_ea)
+        # All data refs to function entrypoints
+        for data_ref in idautils.DataRefsFrom(item):
+            func = ida_funcs.get_func(data_ref)
+            if (
+                func is None
+                or func.start_ea == address
+                or func.start_ea != data_ref
+            ):
                 continue
             results.add(func.start_ea)
     return [api.format_address(result) for result in results]
@@ -295,6 +321,15 @@ def _get_accesses(address: int) -> list[str]:
             api.format_address(accessing_function.start_ea)
             for xref in idautils.XrefsTo(address)
             if (accessing_function := ida_funcs.get_func(xref.frm)) is not None  # type: ignore
+        }
+    )
+
+
+def _get_data_refs_to(address: int) -> list[str]:
+    return list(
+        {
+            api.format_address(data_ref)
+            for data_ref in idautils.DataRefsTo(address)
         }
     )
 

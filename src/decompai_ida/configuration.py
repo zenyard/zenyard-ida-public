@@ -35,8 +35,6 @@ class PluginConfiguration(BaseModel, frozen=True):
         StringConstraints(strip_whitespace=True, min_length=1, max_length=2048),
     ]
 
-    require_confirmation_per_db: bool = True
-
     log_level: ty.Optional[
         ty.Union[
             ty.Literal[
@@ -63,12 +61,10 @@ class PluginConfiguration(BaseModel, frozen=True):
         *,
         api_url: Url,
         api_key: str,
-        require_confirmation_per_db: bool,
     ) -> "PluginConfiguration":
         return PluginConfiguration(
             api_url=api_url,
             api_key=api_key,
-            require_confirmation_per_db=require_confirmation_per_db,
             log_level=self.log_level,
             verify_ssl=self.verify_ssl,
         )
@@ -95,10 +91,8 @@ def show_configuration_dialog_sync() -> bool:
 
         <API key   :A:40:64::>
         <Server URL:A:512:64::>
-        <Ask before running Zenyard on files opened for the first time.:C>>
         %A
     """)
-    REQUIRE_CONFIRMATION_FLAG = 1 << 0
 
     current_config = read_configuration_sync()
 
@@ -110,14 +104,6 @@ def show_configuration_dialog_sync() -> bool:
         512,
         str(current_config.api_url),
     )
-    checkboxes = ida_kernwin.Form.NumericArgument(  # type: ignore
-        ida_kernwin.Form.FT_UINT64,
-        (
-            REQUIRE_CONFIRMATION_FLAG
-            if current_config.require_confirmation_per_db
-            else 0
-        ),
-    )
     errors_arg = ida_kernwin.Form.StringArgument(  # type: ignore
         2048,
         "",
@@ -128,7 +114,6 @@ def show_configuration_dialog_sync() -> bool:
             FORM_DEFINITION,
             api_key_arg.arg,
             api_url_arg.arg,
-            checkboxes.arg,
             errors_arg.arg,
         )
 
@@ -139,9 +124,6 @@ def show_configuration_dialog_sync() -> bool:
             new_config = current_config.with_user_config(
                 api_key=api_key_arg.value.strip(),
                 api_url=api_url_arg.value.strip(),
-                require_confirmation_per_db=(
-                    checkboxes.value & REQUIRE_CONFIRMATION_FLAG
-                ),
             )
             break
         except ValidationError as error:

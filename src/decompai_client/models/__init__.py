@@ -45,7 +45,9 @@ from decompai_client.models.put_revision_body import PutRevisionBody
 from decompai_client.models.range import Range
 from decompai_client.models.range_detail import RangeDetail
 from decompai_client.models.revision_analysis_status import RevisionAnalysisStatus
+from decompai_client.models.section import Section
 from decompai_client.models.swift_function import SwiftFunction
+from decompai_client.models.swift_speculation import SwiftSpeculation
 from decompai_client.models.thunk import Thunk
 from decompai_client.models.user_config import UserConfig
 from decompai_client.models.validation_error import ValidationError

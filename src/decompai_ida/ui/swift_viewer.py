@@ -8,8 +8,14 @@ import importlib.resources
 from qtpy import QtGui
 from qtpy.QtWidgets import QWidget
 
+from decompai_client import SwiftFunction
 from decompai_ida import assets
 from decompai_ida import logger
+from decompai_ida.swift_utils import (
+    NumberedSpeculationsPerLine,
+    build_speculations_per_line,
+    format_speculation_marker,
+)
 from decompai_ida.ui.swift_highlighter import (
     SwiftHighlighter,
     SwiftTokenType,
@@ -24,20 +30,16 @@ class SwiftCodeViewer(ida_kernwin.simplecustviewer_t):
     Swift code viewer widget using IDA's simplecustviewer_t with syntax highlighting.
 
     This widget displays Swift source code with syntax highlighting provided by
-    Pygments. The entire Swift code is provided as a string in the constructor.
+    Pygments. Call :meth:`update_content` to populate the viewer with Swift code
+    and associated metadata.
     """
 
-    def __init__(self, start_ea: int, swift_code: str):
-        """
-        Initialize the Swift code viewer.`
-
-        Args:
-            swift_code: Swift source code to display
-            title: Window title for the viewer
-        """
+    def __init__(self) -> None:
+        """Initialize the Swift code viewer."""
         super().__init__()
-        self._start_ea = start_ea
-        self._swift_code = swift_code
+        self._start_ea: ty.Optional[int] = None
+        self._source: str = ""
+        self._speculations: NumberedSpeculationsPerLine = {}
         self._highlighter = SwiftHighlighter()
 
     def Create(self, title: str) -> bool:  # type: ignore
@@ -61,10 +63,8 @@ class SwiftCodeViewer(ida_kernwin.simplecustviewer_t):
             )
             _setup_tab_icon(created_widget)
 
-            created_widget.setProperty(FUNC_EA_PROPERTY, self._start_ea)
-
-            # Add lines with syntax highlighting
-            self._add_highlighted_content()
+            if self._start_ea is not None:
+                created_widget.setProperty(FUNC_EA_PROPERTY, self._start_ea)
 
             logger.debug(f"Swift code viewer created: {title}")
             return True
@@ -76,20 +76,20 @@ class SwiftCodeViewer(ida_kernwin.simplecustviewer_t):
     def _add_highlighted_content(self):
         """Add the Swift code content with syntax highlighting to the viewer."""
         try:
-            if not self._swift_code:
+            if not self._source:
                 self.AddLine("No Swift code provided", ida_lines.SCOLOR_ERROR)
                 return
 
             # Split code into lines
-            lines = self._swift_code.splitlines(keepends=True)
+            lines = self._source.splitlines(keepends=True)
 
-            highlighted_tokens = self._highlighter.highlight(self._swift_code)
+            highlighted_tokens = self._highlighter.highlight(self._source)
             next_highlighted_token = []
 
             # Add lines with highlighting
             line_start = 0
 
-            for line in lines:
+            for line_number, line in enumerate(lines, start=1):
                 line_end = line_start + len(line)
 
                 # Get tokens for this line
@@ -105,10 +105,11 @@ class SwiftCodeViewer(ida_kernwin.simplecustviewer_t):
                         break
 
                 # Create highlighted line
+                line_postfix = self._get_line_postfix(line_number)
                 highlighted_line = self._create_highlighted_line(
-                    line, line_tokens, line_start
+                    line, line_tokens
                 )
-                self.AddLine(highlighted_line)
+                self.AddLine(highlighted_line + line_postfix)
 
                 # Move to next line
                 line_start = line_end
@@ -117,11 +118,24 @@ class SwiftCodeViewer(ida_kernwin.simplecustviewer_t):
             logger.error(f"Error adding highlighted content: {e}")
             # Fallback to plain text
             self.ClearLines()
-            for line in self._swift_code.splitlines():
+            for line in self._source.splitlines():
                 self.AddLine(line)
 
+    def _get_line_postfix(self, line_number: int) -> str:
+        speculations = self._speculations.get(line_number, ())
+
+        if len(speculations) == 0:
+            return ""
+
+        postfix = "".join(
+            format_speculation_marker(speculation)
+            for speculation in speculations
+        )
+
+        return "  " + postfix
+
     def _create_highlighted_line(
-        self, line: str, line_tokens: ty.List[HighlightedToken], line_start: int
+        self, line: str, line_tokens: ty.List[HighlightedToken]
     ) -> str:
         """
         Create a highlighted line using IDA's color codes.
@@ -189,6 +203,29 @@ class SwiftCodeViewer(ida_kernwin.simplecustviewer_t):
             case _:
                 _: tye.Never = token_type
 
+    def update_content(
+        self,
+        *,
+        start_ea: int,
+        swift_function: SwiftFunction,
+    ) -> None:
+        """Replace the displayed Swift content and metadata."""
+
+        try:
+            self._start_ea = start_ea
+            self._source = swift_function.source
+            self._speculations = build_speculations_per_line(swift_function)
+
+            widget = self.GetWidget()
+            if widget is not None:
+                pyqt_widget = ida_kernwin.PluginForm.TWidgetToPyQtWidget(widget)
+                pyqt_widget.setProperty(FUNC_EA_PROPERTY, self._start_ea)
+
+            self.ClearLines()
+            self._add_highlighted_content()
+        except Exception as error:
+            logger.error(f"Error updating Swift code viewer: {error}")
+
     def OnKeydown(self, vkey: int, shift: int) -> int:
         """
         Handle key press events.
@@ -232,19 +269,19 @@ def _load_swift_icon() -> QtGui.QIcon:
 
 
 def create_swift_viewer(
-    start_ea: int, swift_code: str, title: str = "Swift Code Viewer"
+    *,
+    title: str = "Swift Code Viewer",
 ) -> ty.Optional[SwiftCodeViewer]:
     """
     Convenience function to create and show a Swift code viewer.
 
     Args:
-        swift_code: Swift source code to display
         title: Window title for the viewer
 
     Returns:
         SwiftCodeViewer instance if successful, None otherwise
     """
-    viewer = SwiftCodeViewer(start_ea, swift_code)
+    viewer = SwiftCodeViewer()
     if viewer.Create(title):
         return viewer
     else:

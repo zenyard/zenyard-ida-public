@@ -59,11 +59,11 @@ class CopilotUiTask(Task):
         self._action_handler = OpenCopilotActionHandler(self)
 
         async with ida_tasks.install_action(
-            OPEN_COPILOT_ACTION_ID,
-            "Open Copilot",
-            self._action_handler,
-            "Ctrl+Alt+C",
-            "Open Zenyard's Copilot",
+            action_id=OPEN_COPILOT_ACTION_ID,
+            label="Open Copilot",
+            handler=self._action_handler,
+            shortcut="Ctrl+Alt+C",
+            tooltip="Open Zenyard's Copilot",
         ):
             # Attach to menu
             await ida_tasks.run_ui(

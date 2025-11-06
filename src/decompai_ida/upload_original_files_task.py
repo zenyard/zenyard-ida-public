@@ -28,6 +28,7 @@ class UploadOriginalFilesTask(Task):
                 binary_id=binary_id,
                 name=input_file.name,
                 data=input_file.data,
+                type=input_file.type,
             ),
         )
         await logger.ainfo(

@@ -56,6 +56,7 @@ from decompai_ida.trigger_apply_inferences_task import (
     TriggerApplyInferencesTask,
 )
 from decompai_ida.upload_original_files_task import UploadOriginalFilesTask
+from decompai_ida.upload_sections_task import UploadSectionsTask
 from decompai_ida.upload_revisions_task import UploadRevisionsTask
 
 try:
@@ -113,6 +114,7 @@ _ACTIVE_TASKS: ty.Collection[type[Task]] = (
     StartForegroundTasksTask,
     TriggerApplyInferencesTask,
     UploadOriginalFilesTask,
+    UploadSectionsTask,
     UploadRevisionsTask,
 )
 

@@ -193,11 +193,17 @@ class Model:
         self.asked_initial_questions = storage.SingleValue(
             "initial_upload_suggested", bool, default=False
         )
+        self.ready_for_analysis = storage.SingleValue(
+            "ready_for_analysis", bool, default=False
+        )
         self.binary_instructions = storage.SingleValue(
             "binary_instructions", ty.Optional[str], default=None
         )
         self.original_files_uploaded = storage.SingleValue(
             "original_files_uploaded", bool, default=False
+        )
+        self.sections_uploaded = storage.SingleValue(
+            "sections_uploaded", bool, default=False
         )
         self.database_dirty = storage.SingleValue(
             "database_dirty", bool, default=True
@@ -222,6 +228,9 @@ class Model:
         self.revision_queue = storage.Queue("revision_queue", Revision)
         self.inference_queue = storage.Queue("inference_queue", Inference)
         self.tid_to_object = storage.AddressRelation("tid_to_object")
+        self.sections_excluded_from_upload = storage.AddressMap(
+            "sections_excluded_from_upload", bool
+        )
 
     def _notify_update(self) -> None:
         """
@@ -258,6 +267,10 @@ class Model:
         while not await self.asked_initial_questions.get():
             await self.wait_for_update()
 
+    async def wait_for_ready_for_analysis(self):
+        while not await self.ready_for_analysis.get():
+            await self.wait_for_update()
+
     async def wait_for_user_config(self) -> UserConfig:
         while self.runtime_status.user_config is None:
             await self.wait_for_update()
@@ -267,8 +280,10 @@ class Model:
         await self.binary_id.clear()
         await self.initial_upload_complete.clear()
         await self.asked_initial_questions.clear()
+        await self.ready_for_analysis.clear()
         await self.binary_instructions.clear()
         await self.original_files_uploaded.clear()
+        await self.sections_uploaded.clear()
         await self.database_dirty.clear()
         await self.revision.clear()
         await self.inference_cursor.clear()
@@ -280,3 +295,4 @@ class Model:
         await self.revision_queue.clear()
         await self.inference_queue.clear()
         await self.tid_to_object.clear()
+        await self.sections_excluded_from_upload.clear()

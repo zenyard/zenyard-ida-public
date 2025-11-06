@@ -42,9 +42,9 @@ class ZenyardMenuTask(GlobalTask):
         async with self._ctx.ida_events.subscribe() as event_receiver:
             # Show placeholder initially (no database open on startup)
             async with ida_tasks.install_action(
-                PLACEHOLDER_ACTION_ID,
-                "Open a database to start...",
-                placeholder_handler,
+                action_id=PLACEHOLDER_ACTION_ID,
+                label="Open a database to start...",
+                handler=placeholder_handler,
             ):
                 await ida_tasks.run_ui(
                     lambda: ida_kernwin.attach_action_to_menu(

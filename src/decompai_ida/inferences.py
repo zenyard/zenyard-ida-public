@@ -74,11 +74,13 @@ def _apply_inferences_for_address(
                     pass
                 else:
                     _: tye.Never = inference
-
-                model.inferences.push_sync(address, inference)
-
             except Exception as ex:
                 logger.warning("Error while applying inferences", exc_info=ex)
+
+            try:
+                model.inferences.push_sync(address, inference)
+            except Exception as ex:
+                logger.warning("Error while saving inference", exc_info=ex)
 
     _update_pseudocode_viewer_for_address(address)
 

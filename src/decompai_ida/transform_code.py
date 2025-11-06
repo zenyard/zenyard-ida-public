@@ -45,6 +45,7 @@ def transform_code(
         code="".join(transformed_parts),
         ranges=transformed_ranges,
         calls=func.calls,
+        data_refs_to=func.data_refs_to,
         inference_seq_number=func.inference_seq_number,
         line_ranges=func.line_ranges,
         mangled_name=func.mangled_name,

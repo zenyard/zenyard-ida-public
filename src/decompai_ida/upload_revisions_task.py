@@ -21,6 +21,10 @@ _MAX_RETRIES_FOR_REVISION_REQUEST = 5
 class UploadRevisionsTask(Task):
     async def _run(self):
         await self._ctx.model.wait_for_registration()
+        await logger.adebug("Waiting for ready for analysis")
+        await self._ctx.model.wait_for_ready_for_analysis()
+        while not await self._ctx.model.sections_uploaded.get():
+            await self._ctx.model.wait_for_update()
         while True:
             await self._wait_for_revision()
             await logger.adebug("Starting to upload queued revisions")

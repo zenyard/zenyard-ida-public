@@ -6,6 +6,7 @@ from qtpy.QtWidgets import QApplication, QMainWindow
 
 from decompai_ida import ida_tasks, logger
 from decompai_ida.apply_inferences_task import ApplyInferencesTask
+from decompai_ida.ask_initial_questions_task import ShowInitialQuestionsTask
 from decompai_ida.queue_revisions_task import QueueRevisionsTask
 from decompai_ida.status_bar_widget import StatusBarWidget
 from decompai_ida.tasks import Task
@@ -63,9 +64,14 @@ class UiTask(Task):
 
     async def _on_upload_clicked(self):
         await logger.get().ainfo("Upload requested")
-        self._ctx.model.runtime_status.queue_foreground_task_if_not_already_queued(
-            QueueRevisionsTask
-        )
+        if await self._ctx.model.asked_initial_questions.get():
+            self._ctx.model.runtime_status.queue_foreground_task_if_not_already_queued(
+                QueueRevisionsTask
+            )
+        else:
+            self._ctx.model.runtime_status.queue_foreground_task_if_not_already_queued(
+                ShowInitialQuestionsTask
+            )
         self._ctx.model.notify_update()
 
     async def _on_save_results_clicked(self):

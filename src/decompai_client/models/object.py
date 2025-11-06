@@ -19,12 +19,13 @@ from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError, f
 from typing import Any, List, Optional
 from decompai_client.models.function import Function
 from decompai_client.models.global_variable import GlobalVariable
+from decompai_client.models.section import Section
 from decompai_client.models.thunk import Thunk
 from pydantic import StrictStr, Field
 from typing import Union, List, Set, Optional, Dict
 from typing_extensions import Literal, Self
 
-OBJECT_ONE_OF_SCHEMAS = ["Function", "GlobalVariable", "Thunk"]
+OBJECT_ONE_OF_SCHEMAS = ["Function", "GlobalVariable", "Section", "Thunk"]
 
 class Object(BaseModel):
     """
@@ -36,8 +37,10 @@ class Object(BaseModel):
     oneof_schema_2_validator: Optional[Thunk] = None
     # data type: GlobalVariable
     oneof_schema_3_validator: Optional[GlobalVariable] = None
-    actual_instance: Optional[Union[Function, GlobalVariable, Thunk]] = None
-    one_of_schemas: Set[str] = { "Function", "GlobalVariable", "Thunk" }
+    # data type: Section
+    oneof_schema_4_validator: Optional[Section] = None
+    actual_instance: Optional[Union[Function, GlobalVariable, Section, Thunk]] = None
+    one_of_schemas: Set[str] = { "Function", "GlobalVariable", "Section", "Thunk" }
 
     model_config = ConfigDict(
         validate_assignment=True,
@@ -78,12 +81,17 @@ class Object(BaseModel):
             error_messages.append(f"Error! Input type `{type(v)}` is not `GlobalVariable`")
         else:
             match += 1
+        # validate data type: Section
+        if not isinstance(v, Section):
+            error_messages.append(f"Error! Input type `{type(v)}` is not `Section`")
+        else:
+            match += 1
         if match > 1:
             # more than 1 match
-            raise ValueError("Multiple matches found when setting `actual_instance` in Object with oneOf schemas: Function, GlobalVariable, Thunk. Details: " + ", ".join(error_messages))
+            raise ValueError("Multiple matches found when setting `actual_instance` in Object with oneOf schemas: Function, GlobalVariable, Section, Thunk. Details: " + ", ".join(error_messages))
         elif match == 0:
             # no match
-            raise ValueError("No match found when setting `actual_instance` in Object with oneOf schemas: Function, GlobalVariable, Thunk. Details: " + ", ".join(error_messages))
+            raise ValueError("No match found when setting `actual_instance` in Object with oneOf schemas: Function, GlobalVariable, Section, Thunk. Details: " + ", ".join(error_messages))
         else:
             return v
 
@@ -116,13 +124,19 @@ class Object(BaseModel):
             match += 1
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
+        # deserialize data into Section
+        try:
+            instance.actual_instance = Section.from_json(json_str)
+            match += 1
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
 
         if match > 1:
             # more than 1 match
-            raise ValueError("Multiple matches found when deserializing the JSON string into Object with oneOf schemas: Function, GlobalVariable, Thunk. Details: " + ", ".join(error_messages))
+            raise ValueError("Multiple matches found when deserializing the JSON string into Object with oneOf schemas: Function, GlobalVariable, Section, Thunk. Details: " + ", ".join(error_messages))
         elif match == 0:
             # no match
-            raise ValueError("No match found when deserializing the JSON string into Object with oneOf schemas: Function, GlobalVariable, Thunk. Details: " + ", ".join(error_messages))
+            raise ValueError("No match found when deserializing the JSON string into Object with oneOf schemas: Function, GlobalVariable, Section, Thunk. Details: " + ", ".join(error_messages))
         else:
             return instance
 
@@ -136,7 +150,7 @@ class Object(BaseModel):
         else:
             return json.dumps(self.actual_instance)
 
-    def to_dict(self) -> Optional[Union[Dict[str, Any], Function, GlobalVariable, Thunk]]:
+    def to_dict(self) -> Optional[Union[Dict[str, Any], Function, GlobalVariable, Section, Thunk]]:
         """Returns the dict representation of the actual instance"""
         if self.actual_instance is None:
             return None

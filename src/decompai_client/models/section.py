@@ -17,24 +17,34 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr, field_validator
 from typing import Any, ClassVar, Dict, List, Optional
 from typing_extensions import Annotated
-from decompai_client.models.line_mapping import LineMapping
-from decompai_client.models.swift_speculation import SwiftSpeculation
 from typing import Optional, Set
 from typing_extensions import Self
 
-class SwiftFunction(BaseModel):
+class Section(BaseModel):
     """
-    SwiftFunction
+    Section
     """ # noqa: E501
-    type: Optional[StrictStr] = 'swift_function'
     address: Annotated[str, Field(strict=True)]
-    source: StrictStr
-    line_mappings: List[LineMapping]
-    speculations: Optional[List[SwiftSpeculation]] = None
-    __properties: ClassVar[List[str]] = ["type", "address", "source", "line_mappings", "speculations"]
+    type: Optional[StrictStr] = 'section'
+    name: StrictStr
+    has_known_name: Optional[StrictBool] = False
+    inference_seq_number: Optional[StrictInt] = 0
+    size: StrictInt
+    class_: StrictStr
+    read: StrictBool
+    write: StrictBool
+    execute: StrictBool
+    __properties: ClassVar[List[str]] = ["address", "type", "name", "has_known_name", "inference_seq_number", "size", "class_", "read", "write", "execute"]
+
+    @field_validator('address')
+    def address_validate_regular_expression(cls, value):
+        """Validates the regular expression"""
+        if not re.match(r"^[0-9a-f]{16}$", value):
+            raise ValueError(r"must validate the regular expression /^[0-9a-f]{16}$/")
+        return value
 
     @field_validator('type')
     def type_validate_enum(cls, value):
@@ -42,15 +52,15 @@ class SwiftFunction(BaseModel):
         if value is None:
             return value
 
-        if value not in set(['swift_function']):
-            raise ValueError("must be one of enum values ('swift_function')")
+        if value not in set(['section']):
+            raise ValueError("must be one of enum values ('section')")
         return value
 
-    @field_validator('address')
-    def address_validate_regular_expression(cls, value):
-        """Validates the regular expression"""
-        if not re.match(r"^[0-9a-f]{16}$", value):
-            raise ValueError(r"must validate the regular expression /^[0-9a-f]{16}$/")
+    @field_validator('class_')
+    def class__validate_enum(cls, value):
+        """Validates the enum"""
+        if value not in set(['code', 'data', 'other']):
+            raise ValueError("must be one of enum values ('code', 'data', 'other')")
         return value
 
     model_config = ConfigDict(
@@ -71,7 +81,7 @@ class SwiftFunction(BaseModel):
 
     @classmethod
     def from_json(cls, json_str: str) -> Optional[Self]:
-        """Create an instance of SwiftFunction from a JSON string"""
+        """Create an instance of Section from a JSON string"""
         return cls.from_dict(json.loads(json_str))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -92,25 +102,11 @@ class SwiftFunction(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
-        # override the default output from pydantic by calling `to_dict()` of each item in line_mappings (list)
-        _items = []
-        if self.line_mappings:
-            for _item_line_mappings in self.line_mappings:
-                if _item_line_mappings:
-                    _items.append(_item_line_mappings.to_dict())
-            _dict['line_mappings'] = _items
-        # override the default output from pydantic by calling `to_dict()` of each item in speculations (list)
-        _items = []
-        if self.speculations:
-            for _item_speculations in self.speculations:
-                if _item_speculations:
-                    _items.append(_item_speculations.to_dict())
-            _dict['speculations'] = _items
         return _dict
 
     @classmethod
     def from_dict(cls, obj: Optional[Dict[str, Any]]) -> Optional[Self]:
-        """Create an instance of SwiftFunction from a dict"""
+        """Create an instance of Section from a dict"""
         if obj is None:
             return None
 
@@ -118,11 +114,16 @@ class SwiftFunction(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "type": obj.get("type") if obj.get("type") is not None else 'swift_function',
             "address": obj.get("address"),
-            "source": obj.get("source"),
-            "line_mappings": [LineMapping.from_dict(_item) for _item in obj["line_mappings"]] if obj.get("line_mappings") is not None else None,
-            "speculations": [SwiftSpeculation.from_dict(_item) for _item in obj["speculations"]] if obj.get("speculations") is not None else None
+            "type": obj.get("type") if obj.get("type") is not None else 'section',
+            "name": obj.get("name"),
+            "has_known_name": obj.get("has_known_name") if obj.get("has_known_name") is not None else False,
+            "inference_seq_number": obj.get("inference_seq_number") if obj.get("inference_seq_number") is not None else 0,
+            "size": obj.get("size"),
+            "class_": obj.get("class_"),
+            "read": obj.get("read"),
+            "write": obj.get("write"),
+            "execute": obj.get("execute")
         })
         return _obj
 
