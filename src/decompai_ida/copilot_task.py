@@ -188,7 +188,17 @@ class CopilotTask(Task):
             model_provider=copilot_config.model_provider,
         )
         additional_params = copy.deepcopy(copilot_config.additional_params)
-        computed_additional_params = {}
+        computed_additional_params: dict[str, ty.Any] = {}
+        if copilot_config.model_provider == "openai":
+            import httpx
+
+            if not additional_params.pop("trust_env", True):
+                computed_additional_params["http_client"] = httpx.Client(
+                    trust_env=False
+                )
+                computed_additional_params["http_async_client"] = (
+                    httpx.AsyncClient(trust_env=False)
+                )
         if copilot_config.model_provider == "google_anthropic_vertex":
             credentials_data = additional_params.pop("credentials")
             from google.oauth2 import service_account
