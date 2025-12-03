@@ -4,20 +4,20 @@ import typing as ty
 from decompai_ida import logger
 from decompai_ida.model import Message
 from decompai_ida.tasks import Task, TaskContext
-from decompai_ida.summarization import SummarizationNode
 from decompai_client.models.copilot_config import CopilotConfig
 from decompai_ida.copilot_tools import get_copilot_tools
 
 from langchain.chat_models import init_chat_model
+from langchain.agents import create_agent
+from langchain.agents.middleware import (
+    SummarizationMiddleware,
+    ToolRetryMiddleware,
+)
 from langchain_core.messages.human import HumanMessage
-from langchain_core.messages.utils import count_tokens_approximately
-from langchain_core.prompts.chat import ChatPromptTemplate
 from langchain_core.rate_limiters import InMemoryRateLimiter
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.pregel import Pregel
-from langgraph.prebuilt import create_react_agent
-from langgraph.prebuilt.chat_agent_executor import AgentState
 
 
 # TODO: Taken inspiration from Cline's system prompt.
@@ -32,46 +32,7 @@ You accomplish a given task iteratively, breaking it down into clear steps and w
 4. When using paginated tools, do NOT inform the user about pagination details.
 """.strip()
 
-INITIAL_SUMMARY_PROMPT = ChatPromptTemplate.from_messages(
-    [
-        ("placeholder", "{messages}"),
-        (
-            "user",
-            """
-            Create a summary of the conversation above.
-            Keep the current task goals and plan, conclusions and key findings.
-            If there's still an ongoing goal finish the message by instructing what to do next.
-            Do not create new tasks or goals.
-            Do not finish with questions or asking for further assistance.
-            """,
-        ),
-    ]
-)
-DEFAULT_EXISTING_SUMMARY_PROMPT = ChatPromptTemplate.from_messages(
-    [
-        ("placeholder", "{messages}"),
-        (
-            "user",
-            """
-            This is summary of the conversation so far: {existing_summary}
-
-            Extend this summary by taking into account the new messages above.
-            Keep the current task goals and plan, conclusions and key findings.
-            If there's still an ongoing goal finish the message by instructing what to do next.
-            Always write the new summary in its entirety.
-            Do not create new tasks or goals.
-            Do not finish with questions or asking for further assistance.
-            """,
-        ),
-    ]
-)
-SUMMARIZATION_FINAL_PROMPT = ChatPromptTemplate.from_messages(
-    [
-        ("placeholder", "{system_message}"),
-        ("user", "Summary of the conversation so far: {summary}"),
-        ("placeholder", "{messages}"),
-    ]
-)
+# Summarization configuration
 TOKENS_THRESHOLD_FOR_SUMMARIZATION = 150_000
 SUMMARIZATION_MAX_TOKENS = 10_000
 
@@ -144,7 +105,7 @@ class CopilotTask(Task):
                     message_chunk, str
                 ):
                     continue
-                if message_metadata["langgraph_node"] == "agent":
+                if message_metadata["langgraph_node"] == "model":
                     await logger.adebug(
                         "Received message chunk",
                         content=message_chunk.content,
@@ -218,43 +179,30 @@ class CopilotTask(Task):
             **computed_additional_params,
         )
         tools = await get_copilot_tools(self._ctx.model)
-        llm_for_summarization = (
-            init_chat_model(
-                copilot_config.model_name,
-                model_provider=copilot_config.model_provider,
-                rate_limiter=InMemoryRateLimiter(requests_per_second=15 / 60),
-                **additional_params,
-                **computed_additional_params,
-            )
-            .bind_tools(
-                # Bedrock throws error if summarization messages include tools without this
-                tools
-            )
-            .bind(max_tokens=SUMMARIZATION_MAX_TOKENS)
-        )
+        llm_for_summarization = init_chat_model(
+            copilot_config.model_name,
+            model_provider=copilot_config.model_provider,
+            rate_limiter=InMemoryRateLimiter(requests_per_second=15 / 60),
+            **additional_params,
+            **computed_additional_params,
+        ).bind(max_tokens=SUMMARIZATION_MAX_TOKENS)
 
-        class State(AgentState):
-            # NOTE: we're adding this key to keep track of previous summary information
-            # to make sure we're not summarizing on every LLM call
-            context: dict[str, ty.Any]
-
-        summarization_node = SummarizationNode(
-            token_counter=count_tokens_approximately,
+        summarization_middleware = SummarizationMiddleware(
             model=llm_for_summarization,
-            max_tokens=TOKENS_THRESHOLD_FOR_SUMMARIZATION,
-            max_summary_tokens=SUMMARIZATION_MAX_TOKENS,
-            output_messages_key="llm_input_messages",
-            initial_summary_prompt=INITIAL_SUMMARY_PROMPT,
-            existing_summary_prompt=DEFAULT_EXISTING_SUMMARY_PROMPT,
-            final_prompt=SUMMARIZATION_FINAL_PROMPT,
+            trigger=("tokens", TOKENS_THRESHOLD_FOR_SUMMARIZATION),
         )
 
-        return create_react_agent(
+        # Handle tool errors gracefully by converting exceptions to error messages
+        tool_error_handler = ToolRetryMiddleware(
+            max_retries=0,  # Don't retry, just catch and handle errors
+            on_failure="continue",  # Continue execution instead of raising
+        )
+
+        return create_agent(
             llm,
             tools,
-            prompt=AGENT_SYSTEM_PROMPT,
+            system_prompt=AGENT_SYSTEM_PROMPT,
             checkpointer=checkpointer,
-            pre_model_hook=summarization_node,
-            state_schema=State,
+            middleware=[tool_error_handler, summarization_middleware],
             debug=self._ctx.plugin_config.log_level == "DEBUG",
         )
