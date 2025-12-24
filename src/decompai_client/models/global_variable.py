@@ -31,10 +31,10 @@ class GlobalVariable(BaseModel):
     type: Optional[StrictStr] = 'global_variable'
     name: StrictStr
     has_known_name: Optional[StrictBool] = False
+    mangled_name: Optional[StrictStr] = None
     inference_seq_number: Optional[StrictInt] = 0
     uses: List[Annotated[str, Field(strict=True)]]
-    mangled_name: Optional[StrictStr] = None
-    __properties: ClassVar[List[str]] = ["address", "type", "name", "has_known_name", "inference_seq_number", "uses", "mangled_name"]
+    __properties: ClassVar[List[str]] = ["address", "type", "name", "has_known_name", "mangled_name", "inference_seq_number", "uses"]
 
     @field_validator('address')
     def address_validate_regular_expression(cls, value):
@@ -113,9 +113,9 @@ class GlobalVariable(BaseModel):
             "type": obj.get("type") if obj.get("type") is not None else 'global_variable',
             "name": obj.get("name"),
             "has_known_name": obj.get("has_known_name") if obj.get("has_known_name") is not None else False,
+            "mangled_name": obj.get("mangled_name"),
             "inference_seq_number": obj.get("inference_seq_number") if obj.get("inference_seq_number") is not None else 0,
-            "uses": obj.get("uses"),
-            "mangled_name": obj.get("mangled_name")
+            "uses": obj.get("uses")
         })
         return _obj
 

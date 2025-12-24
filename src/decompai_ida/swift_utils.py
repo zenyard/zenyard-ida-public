@@ -5,6 +5,7 @@ import typing as ty
 import ida_lines
 import ida_nalt
 from decompai_client import SwiftSpeculation
+from decompai_client import TranslationProfile
 from decompai_client.models.swift_function import SwiftFunction
 from decompai_ida.model import Model
 
@@ -15,13 +16,37 @@ class NumberedSpeculation:
     speculation: SwiftSpeculation
 
 
+def find_latest_swift_function_inference_per_profile_sync(
+    model: Model, address: int
+) -> ty.Mapping[TranslationProfile, SwiftFunction]:
+    output: dict[TranslationProfile, SwiftFunction] = {}
+    for inference in model.inferences.read_sync(address):
+        if not isinstance(inference, SwiftFunction):
+            continue
+        profile = inference.profile or TranslationProfile.BALANCED
+        if profile not in output:
+            output[profile] = inference
+    return output
+
+
 def find_latest_swift_function_inference_sync(
     model: Model, address: int
 ) -> ty.Optional[SwiftFunction]:
     """Find the latest SwiftFunction inference for the given address."""
-    for inference in model.inferences.read_sync(address):
-        if isinstance(inference, SwiftFunction):
-            return inference
+    inferences_by_profile = (
+        find_latest_swift_function_inference_per_profile_sync(
+            model=model,
+            address=address,
+        )
+    )
+    for profile in (
+        TranslationProfile.BALANCED,
+        TranslationProfile.RISKY,
+        TranslationProfile.CONSERVATIVE,
+    ):
+        swift_function = inferences_by_profile.get(profile)
+        if swift_function is not None:
+            return swift_function
     return None
 
 

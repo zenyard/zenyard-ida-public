@@ -34,7 +34,6 @@ class CopilotStyles:
 
     USER_INPUT_FRAME = """
         QFrame {
-            background-color: white;
             border-width: 1;
             border-radius: 3;
             border-style: solid;
@@ -44,7 +43,6 @@ class CopilotStyles:
 
     USER_INPUT_FRAME_DISABLED = """
         QFrame {
-            background-color: #e1e1e1;
             border-width: 1;
             border-radius: 3;
             border-style: solid;
@@ -55,14 +53,14 @@ class CopilotStyles:
     USER_TEXT_INPUT = "QTextEdit { border: none; }"
 
     MESSAGE_HTML_TEMPLATE = dedent("""
-    <span style="color: #5C45A0"><b>{sender}</b></span>
+    <span style="color: #A38BDA"><b>{sender}</b></span>
                                    
     {text}
     
     """)
 
-    SEND_BUTTON_SEND = "➤"
-    SEND_BUTTON_STOP = "■"
+    SEND_BUTTON_SEND = "Send"
+    SEND_BUTTON_STOP = "Stop"
 
 
 @dataclass
@@ -332,7 +330,6 @@ class UserInputPanel(QtWidgets.QWidget):
     def _setup_buttons(self):
         """Initialize the buttons with proper styling and accessibility."""
         self.send_stop_button = QtWidgets.QPushButton()
-        self.send_stop_button.setFixedSize(BUTTON_SIZE)
         self.send_stop_button.setObjectName("SendStopButton")
 
         self.clear_conversation_button = QtWidgets.QPushButton(

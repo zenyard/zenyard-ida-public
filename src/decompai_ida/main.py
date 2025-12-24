@@ -76,7 +76,7 @@ try:
         SwiftUiTask,
         UiTask,
     ]
-except ImportError:
+except Exception:
     _UI_GLOBAL_TASKS = []
     _UI_TASKS = []
 

@@ -31,9 +31,10 @@ class Thunk(BaseModel):
     type: Optional[StrictStr] = 'thunk'
     name: StrictStr
     has_known_name: Optional[StrictBool] = False
+    mangled_name: Optional[StrictStr] = None
     inference_seq_number: Optional[StrictInt] = 0
     target: Annotated[str, Field(strict=True)]
-    __properties: ClassVar[List[str]] = ["address", "type", "name", "has_known_name", "inference_seq_number", "target"]
+    __properties: ClassVar[List[str]] = ["address", "type", "name", "has_known_name", "mangled_name", "inference_seq_number", "target"]
 
     @field_validator('address')
     def address_validate_regular_expression(cls, value):
@@ -98,6 +99,11 @@ class Thunk(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # set to None if mangled_name (nullable) is None
+        # and model_fields_set contains the field
+        if self.mangled_name is None and "mangled_name" in self.model_fields_set:
+            _dict['mangled_name'] = None
+
         return _dict
 
     @classmethod
@@ -114,6 +120,7 @@ class Thunk(BaseModel):
             "type": obj.get("type") if obj.get("type") is not None else 'thunk',
             "name": obj.get("name"),
             "has_known_name": obj.get("has_known_name") if obj.get("has_known_name") is not None else False,
+            "mangled_name": obj.get("mangled_name"),
             "inference_seq_number": obj.get("inference_seq_number") if obj.get("inference_seq_number") is not None else 0,
             "target": obj.get("target")
         })

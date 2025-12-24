@@ -68,6 +68,7 @@ from decompai_client.models.section import Section
 from decompai_client.models.swift_function import SwiftFunction
 from decompai_client.models.swift_speculation import SwiftSpeculation
 from decompai_client.models.thunk import Thunk
+from decompai_client.models.translation_profile import TranslationProfile
 from decompai_client.models.user_config import UserConfig
 from decompai_client.models.validation_error import ValidationError
 from decompai_client.models.validation_error_loc_inner import ValidationErrorLocInner

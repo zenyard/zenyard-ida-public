@@ -256,6 +256,7 @@ class SwiftUiTask(Task):
                 action_id=OPEN_SWIFT_GLOW_NEW_TAB_ACTION_ID,
                 label="Open SwiftGlow in New Tab",
                 handler=self._open_swift_action_handler,
+                shortcut="Ctrl+Alt+Shift+S",
                 tooltip="Open Zenyard's SwiftGlow in a new viewer tab",
             ),
         ):

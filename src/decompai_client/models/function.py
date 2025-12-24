@@ -34,15 +34,15 @@ class Function(BaseModel):
     type: Optional[StrictStr] = 'function'
     name: StrictStr
     has_known_name: Optional[StrictBool] = False
+    mangled_name: Optional[StrictStr] = None
     inference_seq_number: Optional[StrictInt] = 0
     code: StrictStr
     calls: List[Annotated[str, Field(strict=True)]]
     data_refs_to: Optional[List[Annotated[str, Field(strict=True)]]] = None
-    mangled_name: Optional[StrictStr] = None
     ranges: Optional[List[Range]] = None
     line_ranges: Optional[List[LineRange]] = None
     decompiler_notes: Optional[List[DecompilerNote]] = None
-    __properties: ClassVar[List[str]] = ["address", "type", "name", "has_known_name", "inference_seq_number", "code", "calls", "data_refs_to", "mangled_name", "ranges", "line_ranges", "decompiler_notes"]
+    __properties: ClassVar[List[str]] = ["address", "type", "name", "has_known_name", "mangled_name", "inference_seq_number", "code", "calls", "data_refs_to", "ranges", "line_ranges", "decompiler_notes"]
 
     @field_validator('address')
     def address_validate_regular_expression(cls, value):
@@ -147,11 +147,11 @@ class Function(BaseModel):
             "type": obj.get("type") if obj.get("type") is not None else 'function',
             "name": obj.get("name"),
             "has_known_name": obj.get("has_known_name") if obj.get("has_known_name") is not None else False,
+            "mangled_name": obj.get("mangled_name"),
             "inference_seq_number": obj.get("inference_seq_number") if obj.get("inference_seq_number") is not None else 0,
             "code": obj.get("code"),
             "calls": obj.get("calls"),
             "data_refs_to": obj.get("data_refs_to"),
-            "mangled_name": obj.get("mangled_name"),
             "ranges": [Range.from_dict(_item) for _item in obj["ranges"]] if obj.get("ranges") is not None else None,
             "line_ranges": [LineRange.from_dict(_item) for _item in obj["line_ranges"]] if obj.get("line_ranges") is not None else None,
             "decompiler_notes": [DecompilerNote.from_dict(_item) for _item in obj["decompiler_notes"]] if obj.get("decompiler_notes") is not None else None

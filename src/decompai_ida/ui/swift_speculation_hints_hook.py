@@ -5,12 +5,12 @@ import typing as ty
 import ida_kernwin
 from textwrap import wrap
 
-from decompai_client import SwiftFunction
 from decompai_ida.model import Model
 from decompai_ida.swift_utils import (
     NumberedSpeculation,
     NumberedSpeculationsPerLine,
     build_speculations_per_line,
+    find_latest_swift_function_inference_sync,
     format_speculation_marker,
     speculation_marker_width,
 )
@@ -106,13 +106,8 @@ class SwiftSpeculationHintsHook(ida_kernwin.UI_Hooks):
             return
 
         if not self._cached_inference.is_valid_for_address(address):
-            result = next(
-                (
-                    inference
-                    for inference in self._model.inferences.read_sync(address)
-                    if isinstance(inference, SwiftFunction)
-                ),
-                None,
+            result = find_latest_swift_function_inference_sync(
+                self._model, address
             )
 
             self._cached_inference = _CachedSpeculations.create(

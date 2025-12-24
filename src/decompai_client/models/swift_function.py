@@ -22,6 +22,7 @@ from typing import Any, ClassVar, Dict, List, Optional
 from typing_extensions import Annotated
 from decompai_client.models.line_mapping import LineMapping
 from decompai_client.models.swift_speculation import SwiftSpeculation
+from decompai_client.models.translation_profile import TranslationProfile
 from typing import Optional, Set
 from typing_extensions import Self
 
@@ -31,10 +32,11 @@ class SwiftFunction(BaseModel):
     """ # noqa: E501
     type: Optional[StrictStr] = 'swift_function'
     address: Annotated[str, Field(strict=True)]
+    profile: Optional[TranslationProfile] = None
     source: StrictStr
     line_mappings: List[LineMapping]
     speculations: Optional[List[SwiftSpeculation]] = None
-    __properties: ClassVar[List[str]] = ["type", "address", "source", "line_mappings", "speculations"]
+    __properties: ClassVar[List[str]] = ["type", "address", "profile", "source", "line_mappings", "speculations"]
 
     @field_validator('type')
     def type_validate_enum(cls, value):
@@ -120,6 +122,7 @@ class SwiftFunction(BaseModel):
         _obj = cls.model_validate({
             "type": obj.get("type") if obj.get("type") is not None else 'swift_function',
             "address": obj.get("address"),
+            "profile": obj.get("profile"),
             "source": obj.get("source"),
             "line_mappings": [LineMapping.from_dict(_item) for _item in obj["line_mappings"]] if obj.get("line_mappings") is not None else None,
             "speculations": [SwiftSpeculation.from_dict(_item) for _item in obj["speculations"]] if obj.get("speculations") is not None else None
