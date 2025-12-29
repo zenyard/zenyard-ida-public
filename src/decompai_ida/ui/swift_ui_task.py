@@ -12,7 +12,10 @@ from decompai_client import LineMapping
 from decompai_ida import ida_tasks, logger, messages, lines
 from decompai_ida.async_utils import wait_until_cancelled
 from decompai_ida.model import Model
-from decompai_ida.swift_utils import find_latest_swift_function_inference_sync
+from decompai_ida.swift_utils import (
+    find_latest_swift_function_inference_per_profile_sync,
+    find_latest_swift_function_inference_sync,
+)
 from decompai_ida.tasks import Task, TaskContext
 from decompai_ida.ui.swift_speculation_hints_hook import (
     SwiftSpeculationHintsHook,
@@ -21,6 +24,11 @@ from decompai_ida.ui.swift_viewer import (
     FUNC_EA_PROPERTY,
     SwiftCodeViewer,
     create_swift_viewer,
+    get_swift_viewer_from_action_context,
+    install_change_profile_actions,
+)
+from decompai_ida.ui.ui_utils import (
+    get_current_line_number_from_custom_viewer_twidget,
 )
 from decompai_client.models.swift_function import SwiftFunction
 
@@ -50,23 +58,15 @@ class OpenSwiftActionHandler(ida_kernwin.action_handler_t):
     def activate(self, ctx):  # type: ignore
         """Handle action activation - open swift glow window."""
         try:
-            swift_function = find_latest_swift_function_inference_sync(
-                self._model,
-                ctx.cur_func.start_ea,
+            swift_function_inference_per_profile = (
+                find_latest_swift_function_inference_per_profile_sync(
+                    model=self._model,
+                    address=ctx.cur_func.start_ea,
+                )
             )
-            if swift_function is None:
+            if not swift_function_inference_per_profile:
                 messages.inform_no_swift_source_code_sync()
                 return 1
-
-            vdui = ida_hexrays.get_widget_vdui(ctx.widget)
-            if vdui is not None:
-                swift_line_number = (
-                    _get_swift_line_number_for_pseudocode_widget(
-                        vdui, swift_function
-                    )
-                )
-            else:
-                swift_line_number = 1
 
             action_id = getattr(ctx, "action", None)
             if action_id == OPEN_SWIFT_GLOW_NEW_TAB_ACTION_ID:
@@ -79,9 +79,21 @@ class OpenSwiftActionHandler(ida_kernwin.action_handler_t):
 
             viewer.update_content(
                 start_ea=ctx.cur_func.start_ea,
-                swift_function=swift_function,
+                swift_function_inference_per_profile=swift_function_inference_per_profile,
             )
-            viewer.Jump(swift_line_number - 1, 0, 0)
+            current_swift_function = viewer.current_swift_function
+
+            vdui = ida_hexrays.get_widget_vdui(ctx.widget)
+            if vdui is not None and current_swift_function is not None:
+                swift_line_number = (
+                    _get_swift_line_number_for_pseudocode_widget(
+                        vdui, current_swift_function
+                    )
+                )
+            else:
+                swift_line_number = 1
+
+            viewer.jump_to_swift_line(swift_line_number)
             viewer.Show()
         except Exception as e:
             logger.error(f"Error opening swift glow: {e}")
@@ -146,9 +158,7 @@ class JumpToPseudocodeActionHandler(ida_kernwin.action_handler_t):
             return
 
         cfunc: ida_hexrays.cfunc_t = vdui.cfunc
-        swift_function = find_latest_swift_function_inference_sync(
-            self._model, address
-        )
+        swift_function = _get_swift_function_from_action_context(ctx)
         if swift_function is None:
             logger.warning(
                 "Can't find SwiftFunction inference while jumping to pseudocode",
@@ -156,9 +166,12 @@ class JumpToPseudocodeActionHandler(ida_kernwin.action_handler_t):
             )
             return
 
-        swift_line_number = _get_current_line_number_from_custom_viewer_twidget(
-            ctx.widget
-        )
+        swift_viewer = get_swift_viewer_from_action_context(ctx)
+        if swift_viewer is None:
+            messages.warn_cant_open_swift_pseudocode_sync()
+            return
+
+        swift_line_number = swift_viewer.get_swift_line_number()
         line_mappings = _translate_mappings_to_line_numbers(
             cfunc=cfunc, line_mappings=swift_function.line_mappings
         )
@@ -172,7 +185,10 @@ class JumpToPseudocodeActionHandler(ida_kernwin.action_handler_t):
     def update(self, ctx):  # type: ignore
         """Update action state - enable only when database is open."""
         if idaapi.get_input_file_path() is not None:
-            if _get_func_address_from_action_context(ctx) is not None:
+            if (
+                _get_func_address_from_action_context(ctx) is not None
+                and _get_swift_function_from_action_context(ctx) is not None
+            ):
                 return ida_kernwin.AST_ENABLE_FOR_WIDGET
             else:
                 return ida_kernwin.AST_DISABLE_FOR_WIDGET
@@ -187,6 +203,16 @@ def _get_func_address_from_action_context(ctx) -> ty.Optional[int]:
     return ida_kernwin.PluginForm.TWidgetToPyQtWidget(ctx.widget).property(
         FUNC_EA_PROPERTY
     )
+
+
+def _get_swift_function_from_action_context(
+    ctx,
+) -> ty.Optional[SwiftFunction]:
+    viewer = get_swift_viewer_from_action_context(ctx)
+    if viewer is None:
+        return None
+
+    return viewer.current_swift_function
 
 
 class SwiftCodeAvailabilityHook(ida_kernwin.UI_Hooks):
@@ -295,6 +321,7 @@ class SwiftUiTask(Task):
                     handler=self._jump_to_pseudocode_action_handler,
                     shortcut="Tab",
                 ),
+                install_change_profile_actions(),
                 ida_tasks.install_hooks(
                     SwiftCodeAvailabilityHook(self._ctx.model)
                 ),
@@ -389,7 +416,7 @@ def _get_swift_line_number_for_pseudocode_widget(
     vdui: ida_hexrays.vdui_t,
     swift_function: SwiftFunction,
 ) -> int:
-    line_number = _get_current_line_number_from_custom_viewer_twidget(vdui.ct)
+    line_number = get_current_line_number_from_custom_viewer_twidget(vdui.ct)
     line_mappings = _translate_mappings_to_line_numbers(
         vdui.cfunc, swift_function.line_mappings
     )
@@ -408,9 +435,3 @@ def _get_swift_line_number_for_pseudocode_widget(
         if smallest_mapping is not None
         else 1
     )
-
-
-def _get_current_line_number_from_custom_viewer_twidget(widget) -> int:
-    place, _, _ = ida_kernwin.get_custom_viewer_place(widget, False)  # type: ignore
-    simple_place = ida_kernwin.place_t.as_simpleline_place_t(place)
-    return simple_place.n + 1

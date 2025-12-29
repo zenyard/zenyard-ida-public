@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from functools import cache
 import typing as ty
 import typing_extensions as tye
@@ -8,10 +9,11 @@ import importlib.resources
 from qtpy import QtGui
 from qtpy.QtWidgets import QWidget
 
-from decompai_client import SwiftFunction
-from decompai_ida import assets
+from decompai_client import SwiftFunction, TranslationProfile
+from decompai_ida import assets, ida_tasks
 from decompai_ida import logger
 from decompai_ida.swift_utils import (
+    NumberedSpeculation,
     NumberedSpeculationsPerLine,
     build_speculations_per_line,
     format_speculation_marker,
@@ -21,8 +23,100 @@ from decompai_ida.ui.swift_highlighter import (
     SwiftTokenType,
     HighlightedToken,
 )
+from decompai_ida.ui.ui_utils import (
+    get_current_line_number_from_custom_viewer_twidget,
+)
 
 FUNC_EA_PROPERTY = "start_ea"
+SWIFT_VIEWER_PROPERTY = "swift_viewer"
+_SYNTHETIC_LINE_COUNT = 1
+
+_PROFILE_LABEL_PER_TRANSLATION_PROFILE: dict[TranslationProfile, str] = {
+    TranslationProfile.BALANCED: "balanced",
+    TranslationProfile.CONSERVATIVE: "conservative",
+    TranslationProfile.RISKY: "speculative",
+}
+
+# When wanted profile is missing, will select first available in this order.
+# First profile will be used by default for new views.
+_PROFILE_PREFERENCE_ORDER = [
+    TranslationProfile.BALANCED,
+    TranslationProfile.CONSERVATIVE,
+    TranslationProfile.RISKY,
+]
+
+# Action IDs for popup menu
+CHANGE_TO_CONSERVATIVE_PROFILE_ACTION = "zenyard:swift_profile:conservative"
+CHANGE_TO_BALANCED_PROFILE_ACTION = "zenyard:swift_profile:balanced"
+CHANGE_TO_RISKY_PROFILE_ACTION = "zenyard:swift_profile:speculative"
+
+
+class ChangeTransformProfileActionHandler(ida_kernwin.action_handler_t):
+    """Base action handler for transformation profile level selection."""
+
+    def __init__(self, profile: TranslationProfile):
+        super().__init__()
+        self._profile = profile
+
+    def activate(self, ctx):  # type: ignore
+        swift_viewer = get_swift_viewer_from_action_context(ctx)
+        if swift_viewer is None:
+            # Unexpected
+            return 1
+
+        swift_viewer.set_transformation_profile(self._profile)
+        return 1
+
+    def update(self, ctx):  # type: ignore
+        swift_viewer = get_swift_viewer_from_action_context(ctx)
+        if swift_viewer is None:
+            return ida_kernwin.AST_DISABLE_FOR_WIDGET
+
+        if not swift_viewer.supports_profile(self._profile):
+            return ida_kernwin.AST_DISABLE_FOR_WIDGET
+
+        return ida_kernwin.AST_ENABLE_FOR_WIDGET
+
+
+_conservative_handler = ChangeTransformProfileActionHandler(
+    TranslationProfile.CONSERVATIVE
+)
+_balanced_handler = ChangeTransformProfileActionHandler(
+    TranslationProfile.BALANCED
+)
+_risky_handler = ChangeTransformProfileActionHandler(TranslationProfile.RISKY)
+
+
+def _label_for_change_profile_action(profile: TranslationProfile) -> str:
+    profile_label = _PROFILE_LABEL_PER_TRANSLATION_PROFILE[profile]
+    return f"Switch to {profile_label} profile"
+
+
+@asynccontextmanager
+async def install_change_profile_actions():
+    async with (
+        ida_tasks.install_action(
+            action_id=CHANGE_TO_CONSERVATIVE_PROFILE_ACTION,
+            label=_label_for_change_profile_action(
+                TranslationProfile.CONSERVATIVE
+            ),
+            handler=_conservative_handler,
+            shortcut="1",
+        ),
+        ida_tasks.install_action(
+            action_id=CHANGE_TO_BALANCED_PROFILE_ACTION,
+            label=_label_for_change_profile_action(TranslationProfile.BALANCED),
+            handler=_balanced_handler,
+            shortcut="2",
+        ),
+        ida_tasks.install_action(
+            action_id=CHANGE_TO_RISKY_PROFILE_ACTION,
+            label=_label_for_change_profile_action(TranslationProfile.RISKY),
+            handler=_risky_handler,
+            shortcut="3",
+        ),
+    ):
+        yield
 
 
 class SwiftCodeViewer(ida_kernwin.simplecustviewer_t):
@@ -38,9 +132,21 @@ class SwiftCodeViewer(ida_kernwin.simplecustviewer_t):
         """Initialize the Swift code viewer."""
         super().__init__()
         self._start_ea: ty.Optional[int] = None
-        self._source: str = ""
+        self._current_profile: TranslationProfile = _PROFILE_PREFERENCE_ORDER[0]
+        self._swift_function_inference_per_profile: ty.Mapping[
+            TranslationProfile, SwiftFunction
+        ] = {}
         self._speculations: NumberedSpeculationsPerLine = {}
         self._highlighter = SwiftHighlighter()
+
+    @property
+    def current_swift_function(self) -> ty.Optional[SwiftFunction]:
+        return self._swift_function_inference_per_profile.get(
+            self._current_profile
+        )
+
+    def supports_profile(self, profile: TranslationProfile) -> bool:
+        return profile in self._swift_function_inference_per_profile
 
     def Create(self, title: str) -> bool:  # type: ignore
         """
@@ -63,8 +169,31 @@ class SwiftCodeViewer(ida_kernwin.simplecustviewer_t):
             )
             _setup_tab_icon(created_widget)
 
+            created_widget.setProperty(SWIFT_VIEWER_PROPERTY, self)
             if self._start_ea is not None:
                 created_widget.setProperty(FUNC_EA_PROPERTY, self._start_ea)
+
+            # Register and attach popup menu actions
+            widget = self.GetWidget()
+            if widget is not None:
+                ida_kernwin.attach_action_to_popup(
+                    widget,
+                    None,
+                    CHANGE_TO_CONSERVATIVE_PROFILE_ACTION,
+                    "",
+                )
+                ida_kernwin.attach_action_to_popup(
+                    widget,
+                    None,
+                    CHANGE_TO_BALANCED_PROFILE_ACTION,
+                    "",
+                )
+                ida_kernwin.attach_action_to_popup(
+                    widget,
+                    None,
+                    CHANGE_TO_RISKY_PROFILE_ACTION,
+                    "",
+                )
 
             logger.debug(f"Swift code viewer created: {title}")
             return True
@@ -73,23 +202,30 @@ class SwiftCodeViewer(ida_kernwin.simplecustviewer_t):
             logger.error(f"Error creating Swift code viewer: {e}")
             return False
 
-    def _add_highlighted_content(self):
+    def _add_highlighted_content(self) -> None:
         """Add the Swift code content with syntax highlighting to the viewer."""
+        swift_function = self.current_swift_function
+        source = swift_function.source if swift_function is not None else ""
         try:
-            if not self._source:
+            if not source:
                 self.AddLine("No Swift code provided", ida_lines.SCOLOR_ERROR)
                 return
 
-            # Split code into lines
-            lines = self._source.splitlines(keepends=True)
+            profile_label = _PROFILE_LABEL_PER_TRANSLATION_PROFILE[
+                self._current_profile
+            ]
+            source = f"// Profile: {profile_label}\n{source}"
 
-            highlighted_tokens = self._highlighter.highlight(self._source)
+            # Split code into lines, add synthetic lines
+            lines = source.splitlines(keepends=True)
+
+            highlighted_tokens = self._highlighter.highlight(source)
             next_highlighted_token = []
 
             # Add lines with highlighting
             line_start = 0
 
-            for line_number, line in enumerate(lines, start=1):
+            for display_line_number, line in enumerate(lines, start=1):
                 line_end = line_start + len(line)
 
                 # Get tokens for this line
@@ -105,7 +241,7 @@ class SwiftCodeViewer(ida_kernwin.simplecustviewer_t):
                         break
 
                 # Create highlighted line
-                line_postfix = self._get_line_postfix(line_number)
+                line_postfix = self._get_line_postfix(display_line_number)
                 highlighted_line = self._create_highlighted_line(
                     line, line_tokens
                 )
@@ -118,11 +254,15 @@ class SwiftCodeViewer(ida_kernwin.simplecustviewer_t):
             logger.error(f"Error adding highlighted content: {e}")
             # Fallback to plain text
             self.ClearLines()
-            for line in self._source.splitlines():
+            for line in source.splitlines():
                 self.AddLine(line)
 
-    def _get_line_postfix(self, line_number: int) -> str:
-        speculations = self._speculations.get(line_number, ())
+    def _get_line_postfix(self, display_line_number: int) -> str:
+        swift_line_number = _to_swift_line_number(display_line_number)
+        if swift_line_number is None:
+            return ""
+
+        speculations = self._speculations.get(swift_line_number, ())
 
         if len(speculations) == 0:
             return ""
@@ -207,14 +347,37 @@ class SwiftCodeViewer(ida_kernwin.simplecustviewer_t):
         self,
         *,
         start_ea: int,
-        swift_function: SwiftFunction,
+        swift_function_inference_per_profile: ty.Mapping[
+            TranslationProfile, SwiftFunction
+        ],
     ) -> None:
         """Replace the displayed Swift content and metadata."""
 
+        self._start_ea = start_ea
+        self._swift_function_inference_per_profile = dict(
+            swift_function_inference_per_profile
+        )
+        self._refresh_current_function()
+
+    def set_transformation_profile(self, profile: TranslationProfile):
+        self._current_profile = profile
+        self._refresh_current_function()
+
+    def _refresh_current_function(self):
         try:
-            self._start_ea = start_ea
-            self._source = swift_function.source
-            self._speculations = build_speculations_per_line(swift_function)
+            # If profile missing, switch select by preference
+            if self.current_swift_function is None:
+                for profile in self._swift_function_inference_per_profile:
+                    if self.supports_profile(profile):
+                        self._current_profile = profile
+                        break
+
+            swift_function = self.current_swift_function
+            self._speculations = (
+                build_speculations_per_line(swift_function)
+                if swift_function is not None
+                else {}
+            )
 
             widget = self.GetWidget()
             if widget is not None:
@@ -225,6 +388,34 @@ class SwiftCodeViewer(ida_kernwin.simplecustviewer_t):
             self._add_highlighted_content()
         except Exception as error:
             logger.error(f"Error updating Swift code viewer: {error}")
+
+    def jump_to_swift_line(self, swift_line_number: int) -> None:
+        display_line_number = swift_line_number + _SYNTHETIC_LINE_COUNT
+        self.Jump(display_line_number - 1, 0, 0)
+
+    def get_swift_line_number(self) -> int:
+        display_line_number = (
+            get_current_line_number_from_custom_viewer_twidget(self.GetWidget())
+        )
+        swift_line_number = _to_swift_line_number(display_line_number)
+        if swift_line_number is None:
+            return 1
+
+        return swift_line_number
+
+    def get_speculations_for_place(
+        self, place: ida_kernwin.place_t
+    ) -> ty.Sequence[NumberedSpeculation]:
+        simple_place = ida_kernwin.place_t.as_simpleline_place_t(place)
+        if simple_place is None:
+            return ()
+
+        display_line_number = simple_place.n + 1
+        swift_line_number = _to_swift_line_number(display_line_number)
+        if swift_line_number is None:
+            return ()
+
+        return self._speculations.get(swift_line_number, ())
 
     def OnKeydown(self, vkey: int, shift: int) -> int:
         """
@@ -242,6 +433,7 @@ class SwiftCodeViewer(ida_kernwin.simplecustviewer_t):
             if vkey == 27:  # ESCAPE
                 self.Close()
                 return 1
+
             return 0
 
         except Exception as e:
@@ -249,7 +441,7 @@ class SwiftCodeViewer(ida_kernwin.simplecustviewer_t):
             return 0
 
 
-def _setup_tab_icon(created_widget: QWidget):
+def _setup_tab_icon(created_widget: QWidget) -> None:
     """Setup tab icon"""
 
     try:
@@ -287,3 +479,28 @@ def create_swift_viewer(
     else:
         logger.error("Failed to create Swift code viewer")
         return None
+
+
+def _to_swift_line_number(
+    display_line_number: int,
+) -> ty.Optional[int]:
+    swift_line_number = display_line_number - _SYNTHETIC_LINE_COUNT
+    if swift_line_number < 1:
+        return None
+    return swift_line_number
+
+
+def get_swift_viewer_from_action_context(
+    ctx,
+) -> ty.Optional[SwiftCodeViewer]:
+    if ctx.widget is None:
+        return None
+
+    viewer = ida_kernwin.PluginForm.TWidgetToPyQtWidget(ctx.widget).property(
+        SWIFT_VIEWER_PROPERTY
+    )
+
+    if isinstance(viewer, SwiftCodeViewer):
+        return viewer
+
+    return None
