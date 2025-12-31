@@ -46,6 +46,11 @@ Skip decompiling functions larger than this. These may cause decompiler to hang 
 long time, and will probably be too large for model.
 """
 
+# If maximum number of discovered variables exceed this, no variables will be
+# detected. This is a safety for cases where the number of detected globals is
+# extremely high.
+_MAXIMUM_GLOBAL_VARIABLES = 5000
+
 _MANGLED_NAME_CLEANUP_REGEX = re.compile(r"^(?:j_)+|(?:_\d+)+$")
 
 
@@ -85,7 +90,7 @@ def _is_nullsub_sync(address: int) -> bool:
     return name.startswith("nullsub_")
 
 
-def all_object_symbols_sync() -> ty.Iterator[Symbol]:
+def _all_function_symbols_sync() -> ty.Iterator[Symbol]:
     for segment_base in idautils.Segments():
         segment = ida_segment.getseg(segment_base)
 
@@ -99,6 +104,8 @@ def all_object_symbols_sync() -> ty.Iterator[Symbol]:
             if not _is_padding_function_sync(ea) and not _is_nullsub_sync(ea)
         )
 
+
+def _all_global_variable_symbols_sync() -> ty.Iterator[Symbol]:
     # Get all global variables with references from code
     current_address = 0
     while (
@@ -126,6 +133,20 @@ def all_object_symbols_sync() -> ty.Iterator[Symbol]:
             and name.startswith("a")
         ):
             yield Symbol(current_address, "global_variable")
+
+
+def all_object_symbols_sync() -> ty.Iterator[Symbol]:
+    yield from _all_function_symbols_sync()
+
+    global_variables_buffer = list[Symbol]()
+    for symbol in _all_global_variable_symbols_sync():
+        global_variables_buffer.append(symbol)
+        if len(global_variables_buffer) > _MAXIMUM_GLOBAL_VARIABLES:
+            logger.warning("Detected too many global variables, discarding")
+            global_variables_buffer = []
+            break
+
+    yield from global_variables_buffer
 
 
 # Note - decompiling a function actually requires writing to the DB, probably to

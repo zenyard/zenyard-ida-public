@@ -29,6 +29,9 @@ from decompai_ida.broadcast_ida_events_task import (
 from decompai_ida.download_inferences_task import DownloadInferencesTask
 from decompai_ida.events import DatabaseOpened, EventRecorder, IdaEvent
 from decompai_ida.fetch_user_config_task import FetchUserConfigTask
+from decompai_ida.inline_shannon_debug_traces_task import (
+    InlineShannonDebugTracesTask,
+)
 from decompai_ida.ask_initial_questions_task import AskInitialQuestions
 from decompai_ida.model import CopilotModel, Model
 from decompai_ida.monitor_initial_analysis_task import (
@@ -99,6 +102,7 @@ _TASKS: ty.Collection[type[Task]] = (
     FetchUserConfigTask,
     TrackChangesTask,
     TrackIdaSettledTask,
+    InlineShannonDebugTracesTask,
     *_UI_TASKS,
     # TODO: Restore MaintainTidToObjectTask once we resolve crashes
 )

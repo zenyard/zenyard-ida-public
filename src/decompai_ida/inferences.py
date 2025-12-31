@@ -27,6 +27,13 @@ from decompai_ida.lvars import (
 from decompai_ida.model import Inference, Model
 
 
+_MAX_LINES_IN_EXISTING_COMMENT_APPEND_TO = 3
+"""
+Maximum number of lines in an existing comment that still allows appending a
+new overview to it.
+"""
+
+
 def apply_pending_inferences_sync(address: int, *, model: Model):
     pending_inferences = list(model.pending_inferences.read_sync(address))
     # Reverse the list to get oldest to newest.
@@ -119,32 +126,6 @@ def has_user_defined_name_sync(address: int, *, model: Model) -> bool:
     )
 
 
-def has_user_defined_comment_sync(address: int, *, model: Model) -> bool:
-    """
-    Whether given address has function comment given by user.
-    """
-
-    func = ida_funcs.get_func(address)
-    if func is None:
-        return False
-
-    comment = ida_funcs.get_func_cmt(func, False) or ida_funcs.get_func_cmt(
-        func, True
-    )
-    if comment is None:
-        return False
-
-    comment = comment.strip()
-    if len(comment) == 0:
-        return False
-
-    return not any(
-        isinstance(inference, FunctionOverview)
-        and inference.full_description.strip() == comment
-        for inference in model.inferences.read_sync(address)
-    )
-
-
 T = ty.TypeVar("T")
 
 
@@ -176,16 +157,66 @@ def _apply_local_transformations(inference: Inference) -> Inference:
         return inference
 
 
+def _get_existing_comment(func: ida_funcs.func_t) -> str:
+    return (
+        ida_funcs.get_func_cmt(func, False)
+        or ida_funcs.get_func_cmt(func, True)
+        or ""
+    )
+
+
+def _get_previous_overview_in_comment(
+    address: int, *, comment: str, model: Model
+) -> ty.Optional[FunctionOverview]:
+    return next(
+        (
+            inference
+            for inference in model.inferences.read_sync(address)
+            if isinstance(inference, FunctionOverview)
+            and inference.full_description in comment
+        ),
+        None,
+    )
+
+
 def _apply_overview(overview: FunctionOverview, *, model: Model):
     address = api.parse_address(overview.address)
 
-    if has_user_defined_comment_sync(address, model=model):
-        return
-
     func = ida_funcs.get_func(address)
-    assert func is not None
+    if func is None:
+        raise ValueError(f"Not a function: {address:016x}")
+    existing_comment = _get_existing_comment(func)
 
-    ida_funcs.set_func_cmt(func, overview.full_description, False)
+    new_comment: ty.Optional[str] = None
+
+    # No comment -> set overview as comment
+    if len(existing_comment.strip()) == 0:
+        new_comment = overview.full_description
+
+    # Comment contains past overview within it -> replace past over view
+    elif (
+        previous_overview := _get_previous_overview_in_comment(
+            address=address, comment=existing_comment, model=model
+        )
+    ) is not None:
+        updated_comment = existing_comment.replace(
+            previous_overview.full_description,
+            overview.full_description,
+            1,
+        )
+        ida_funcs.set_func_cmt(func, updated_comment, False)
+
+    # Comment is short -> append our overview
+    elif (
+        len(existing_comment.splitlines())
+        <= _MAX_LINES_IN_EXISTING_COMMENT_APPEND_TO
+    ):
+        new_comment = "\n\n".join(
+            [existing_comment.rstrip(), overview.full_description]
+        )
+
+    if new_comment is not None:
+        ida_funcs.set_func_cmt(func, new_comment, False)
 
 
 def _apply_name(name: Name, *, model: Model):
