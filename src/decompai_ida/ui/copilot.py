@@ -1,3 +1,4 @@
+import html
 import importlib.resources
 import typing as ty
 import typing_extensions as tye
@@ -167,10 +168,10 @@ class ChatDisplay(QtWidgets.QTextEdit):
             html_content = "".join(
                 [
                     CopilotStyles.MESSAGE_HTML_TEMPLATE.format(
-                        sender=_get_message_sender(message),
+                        sender=html.escape(_get_message_sender(message)),
                         margin_left=MESSAGE_MARGIN_LEFT,
                         margin_top=MESSAGE_MARGIN_TOP,
-                        text=message.text,
+                        text=html.escape(message.text),
                     )
                     for message in messages
                 ]
