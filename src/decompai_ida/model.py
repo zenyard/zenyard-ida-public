@@ -128,6 +128,7 @@ class RuntimeStatus:
 class Message:
     sender: ty.Literal["AI", "User"]
     text: str
+    tool_count: ty.Optional[int] = None
 
 
 @dataclass

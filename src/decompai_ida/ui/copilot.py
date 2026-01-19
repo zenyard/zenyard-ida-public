@@ -55,9 +55,13 @@ class CopilotStyles:
 
     MESSAGE_HTML_TEMPLATE = dedent("""
     <span style="color: #A38BDA"><b>{sender}</b></span>
-                                   
+
     {text}
-    
+
+    """)
+
+    TOOL_USAGE_SUFFIX = dedent("""
+    <span style="color: #808080"><i>Used {tool_count}</i></span>
     """)
 
     SEND_BUTTON_SEND = "Send"
@@ -165,17 +169,29 @@ class ChatDisplay(QtWidgets.QTextEdit):
     def set_messages(self, messages: ty.List[Message]):
         """Update the chat display with new messages."""
         try:
-            html_content = "".join(
-                [
+            html_parts = []
+            for message in messages:
+                # Render message with sender and text
+                html_parts.append(
                     CopilotStyles.MESSAGE_HTML_TEMPLATE.format(
                         sender=html.escape(_get_message_sender(message)),
                         margin_left=MESSAGE_MARGIN_LEFT,
                         margin_top=MESSAGE_MARGIN_TOP,
                         text=html.escape(message.text),
                     )
-                    for message in messages
-                ]
-            )
+                )
+
+                # Append tool usage info if present
+                if message.tool_count is not None and message.tool_count > 0:
+                    noun = "tools" if message.tool_count >= 2 else "tool"
+                    html_parts.append(
+                        CopilotStyles.TOOL_USAGE_SUFFIX.format(
+                            tool_count=f"{message.tool_count} {noun}"
+                        )
+                    )
+
+            html_content = "".join(html_parts)
+
             if self._last_messages_html == html_content:
                 return
             self._last_messages_html = html_content

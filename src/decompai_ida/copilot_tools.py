@@ -10,8 +10,8 @@ import ida_typeinf
 import idaapi
 import idautils
 
-from pydantic import Field
-from decompai_ida import ida_tasks
+from pydantic import BaseModel, Field
+from decompai_ida import ida_tasks, logger
 from decompai_ida.model import Model
 from decompai_ida.swift_utils import (
     find_latest_swift_function_inference_sync,
@@ -57,6 +57,14 @@ class LocalType:
     definition: str
 
 
+class BatchResult(BaseModel, frozen=True):
+    """Result of a batch operation"""
+
+    success_count: int
+    failure_count: int
+    errors: list[str]  # Human-readable error messages
+
+
 T = ty.TypeVar("T")
 T2 = ty.TypeVar("T2")
 
@@ -76,8 +84,36 @@ class PagedResults(ty.Generic[T]):
 def get_function(address: str) -> ida_funcs.func_t:
     func = ida_funcs.get_func(int(address, 16))
     if func is None:
-        raise Exception(f"Failed to retreive function from address: {address}")
+        raise Exception(f"Failed to retrieve function from address: {address}")
     return func
+
+
+def _perform_batch_operations(
+    *,
+    items: ty.Iterable[T],
+    operation: ty.Callable[[T], None],
+    operation_name: str,
+) -> str:
+    success_count = 0
+    failure_count = 0
+    errors = list[str]()
+
+    for item in items:
+        try:
+            operation(item)
+            success_count += 1
+        except Exception as ex:
+            failure_count += 1
+            errors.append(str(ex))
+            logger.warning(
+                f"Error in batch {operation_name} with item {item}", exc_info=ex
+            )
+
+    _update_pseudocode_viewer()
+    result = BatchResult(
+        success_count=success_count, failure_count=failure_count, errors=errors
+    )
+    return result.model_dump_json()
 
 
 def decompile_function_sync(address: str) -> str:
@@ -122,19 +158,38 @@ def get_current_function_sync(model: Model) -> ty.Optional[Function]:
     return Function.from_ea(model, func.start_ea)
 
 
-def rename_function_local_variable_sync(
-    address: str, from_name: str, to_name: str
-):
+def rename_function_local_variables_sync(
+    address: str,
+    variable_renames: dict[str, str],
+) -> str:
     func = get_function(address)
-    ida_hexrays.rename_lvar(func.start_ea, from_name, to_name)
-    # TODO: We probably want to do it only once in a while
-    _update_pseudocode_viewer()
+
+    def rename_one_variable(item: tuple[str, str]):
+        from_name, to_name = item
+        success = ida_hexrays.rename_lvar(func.start_ea, from_name, to_name)
+        if not success:
+            raise Exception(f"Failed renaming '{from_name}' to '{to_name}'")
+
+    return _perform_batch_operations(
+        items=variable_renames.items(),
+        operation=rename_one_variable,
+        operation_name="rename variable",
+    )
 
 
-def rename_symbol_sync(address: str, new_name: str):
-    if not ida_name.set_name(int(address, 16), new_name):
-        raise Exception(f"Failed to rename {address} to {new_name}")
-    _update_pseudocode_viewer()
+def rename_symbols_sync(
+    symbol_renames: dict[str, str],
+) -> str:
+    def rename_one_symbol(item: tuple[str, str]):
+        address, new_name = item
+        if not ida_name.set_name(int(address, 16), new_name):
+            raise Exception(f"Failed to rename {address} to {new_name}")
+
+    return _perform_batch_operations(
+        items=symbol_renames.items(),
+        operation=rename_one_symbol,
+        operation_name="rename symbol",
+    )
 
 
 def list_calling_functions_sync(
@@ -161,35 +216,53 @@ def get_function_comment_sync(address: str) -> ty.Optional[str]:
     return ida_funcs.get_func_cmt(func, False)
 
 
-def set_function_comment_sync(address: str, comment: ty.Optional[str]):
-    func = get_function(address)
-    ida_funcs.set_func_cmt(func, comment or "", False)
-    _update_pseudocode_viewer()
+def set_function_comments_sync(
+    comment_updates: dict[str, ty.Optional[str]],
+) -> str:
+    def set_one_comment(item: tuple[str, ty.Optional[str]]):
+        address, comment = item
+        func = get_function(address)
+        ida_funcs.set_func_cmt(func, comment or "", False)
+
+    return _perform_batch_operations(
+        items=comment_updates.items(),
+        operation=set_one_comment,
+        operation_name="set comment",
+    )
 
 
-def set_function_prototype_sync(address: str, new_prototype: str):
-    if not new_prototype.endswith(";"):
-        new_prototype += ";"
-    func = get_function(address)
-    new_tinfo = ida_typeinf.tinfo_t()
-    if (
-        ida_typeinf.parse_decl(
-            new_tinfo,
-            None,  # type: ignore
-            new_prototype,
-            ida_typeinf.PT_SIL,
-        )
-        is None
-    ):  # type: ignore
-        raise Exception(f"Failed to parse c declaration: {new_prototype}")
-    # TODO: Could not use ida_typeinf.ida_typeinf.TINFO_GUESSED, not sure why
-    if not ida_typeinf.apply_tinfo(
-        func.start_ea, new_tinfo, ida_typeinf.TINFO_DEFINITE
-    ):
-        raise Exception(
-            f"Failed to apply tinfo_t to function prototype: {new_tinfo}"
-        )
-    _update_pseudocode_viewer()
+def set_function_prototypes_sync(
+    prototype_updates: dict[str, str],
+) -> str:
+    def set_one_prototype(item: tuple[str, str]):
+        address, new_prototype = item
+        if not new_prototype.endswith(";"):
+            new_prototype += ";"
+        func = get_function(address)
+        new_tinfo = ida_typeinf.tinfo_t()
+        if (
+            ida_typeinf.parse_decl(
+                new_tinfo,
+                None,  # type: ignore
+                new_prototype,
+                ida_typeinf.PT_SIL,
+            )
+            is None
+        ):  # type: ignore
+            raise Exception(f"Failed to parse c declaration: {new_prototype}")
+        # TODO: Could not use ida_typeinf.ida_typeinf.TINFO_GUESSED, not sure why
+        if not ida_typeinf.apply_tinfo(
+            func.start_ea, new_tinfo, ida_typeinf.TINFO_DEFINITE
+        ):
+            raise Exception(
+                f"Failed to apply tinfo_t to function prototype: {new_tinfo}"
+            )
+
+    return _perform_batch_operations(
+        items=prototype_updates.items(),
+        operation=set_one_prototype,
+        operation_name="set prototype",
+    )
 
 
 def get_local_types_sync(
@@ -406,30 +479,27 @@ async def get_copilot_tools(model: Model):
         return await ida_tasks.run(decompile_function_sync, address)
 
     @tool()
-    async def rename_function_local_variable(
-        address: ty.Annotated[
-            str,
-            "Address of the function to rename a local variable in",
+    async def rename_function_local_variables(
+        address: ty.Annotated[str, "Address of the function"],
+        variable_renames: ty.Annotated[
+            dict[str, str],
+            "Dict mapping old variable names to new names",
         ],
-        from_name: ty.Annotated[
-            str,
-            "The original name of the variable to rename",
-        ],
-        to_name: ty.Annotated[str, "The new name of the variable"],
-    ):
-        """Rename a local variable in the given function"""
+    ) -> str:
+        """Rename multiple local variables in a single function"""
         return await ida_tasks.run(
-            rename_function_local_variable_sync, address, from_name, to_name
+            rename_function_local_variables_sync, address, variable_renames
         )
 
     @tool()
-    async def rename_symbol(
-        symbol_address: _SymbolName,
-        new_name: ty.Annotated[str, "The new name for the symbol."],
-    ):
-        """Renames a symbol such as a function or a global variable"""
-        # TODO: Consider using from_name, to_name to lower chance of hallucinations
-        return await ida_tasks.run(rename_symbol_sync, symbol_address, new_name)
+    async def rename_symbols(
+        symbol_renames: ty.Annotated[
+            dict[str, str],
+            "Dict mapping addresses to new names",
+        ],
+    ) -> str:
+        """Rename multiple symbols (functions or global variables) in a single batch"""
+        return await ida_tasks.run(rename_symbols_sync, symbol_renames)
 
     @tool()
     async def list_calling_functions(
@@ -452,27 +522,25 @@ async def get_copilot_tools(model: Model):
         return await ida_tasks.run(get_function_comment_sync, address)
 
     @tool()
-    async def set_function_comment(
-        address: ty.Annotated[str, "Address of the function"],
-        comment: ty.Annotated[
-            ty.Optional[str],
-            "The new function documentation or None to remove the current one. "
-            "Use 80 character lines and format this like a function documentation.",
+    async def set_function_comments(
+        comment_updates: ty.Annotated[
+            dict[str, ty.Optional[str]],
+            "Dict mapping addresses to comments (null to clear); Use 80 character lines and format this like a function documentation.",
         ],
-    ) -> ty.Optional[str]:
-        """Sets the function documentation for the given function"""
-        return await ida_tasks.run(set_function_comment_sync, address, comment)
+    ) -> str:
+        """Set comments on multiple functions in a single batch"""
+        return await ida_tasks.run(set_function_comments_sync, comment_updates)
 
     @tool()
-    async def set_function_prototype(
-        address: ty.Annotated[str, "Address of the function"],
-        new_prototype: ty.Annotated[
-            str, "A new c-style function prototype for the function"
+    async def set_function_prototypes(
+        prototype_updates: ty.Annotated[
+            dict[str, str],
+            "Dict mapping addresses to C-style function prototypes",
         ],
-    ):
-        """Sets a function's prototype"""
+    ) -> str:
+        """Set prototypes on multiple functions in a single batch"""
         return await ida_tasks.run(
-            set_function_prototype_sync, address, new_prototype
+            set_function_prototypes_sync, prototype_updates
         )
 
     @tool()
@@ -503,12 +571,12 @@ async def get_copilot_tools(model: Model):
         get_symbol_address_by_name,
         list_functions,
         decompile_function,
-        rename_function_local_variable,
-        rename_symbol,
+        rename_function_local_variables,
+        rename_symbols,
         list_calling_functions,
         get_function_comment,
-        set_function_comment,
-        set_function_prototype,
+        set_function_comments,
+        set_function_prototypes,
         get_local_types,
         search_function_comments,
     ]

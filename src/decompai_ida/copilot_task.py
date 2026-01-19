@@ -6,7 +6,13 @@ from decompai_ida.model import Message
 from decompai_ida.tasks import Task, TaskContext
 from decompai_client.models.copilot_config import CopilotConfig
 from decompai_ida.copilot_tools import get_copilot_tools
+from langchain_core.messages import AIMessageChunk
 
+import openai
+import anthropic
+import botocore.exceptions
+import google.api_core.exceptions
+import ollama
 from langchain.chat_models import init_chat_model
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
@@ -20,20 +26,29 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.pregel import Pregel
 
 
-# TODO: Taken inspiration from Cline's system prompt.
-# Either come up with a system prompt from scratch or attribute Cline (if possible with their license).
 AGENT_SYSTEM_PROMPT = """
-You are a reverse engineering ai assistant. Your name is "Zenyard Copilot".
+You are a reverse engineering AI assistant. Your name is "Zenyard Copilot".
 
-You accomplish a given task iteratively, breaking it down into clear steps and working through them methodically.
+You run inside IDA (Interactive DisAssembler); you have tools to extract information and make changes to the currently opened file.
 
-1. Analyze the user's task and set clear, achievable goals to accomplish it. Prioritize these goals in a logical order.
-2. Work through these goals sequentially, utilizing available tools as necessary. You are allowed and encouraged to perform multiple tool calls within a single turn to make progress in a single goal. Each goal should correspond to a distinct step in your problem-solving process. You will be informed on the work completed and what's remaining as you go.
-3. The user may provide feedback, which you can use to make improvements and try again. But DO NOT continue in pointless back and forth conversations, i.e. don't end your responses with questions or offers for further assistance.
-4. When using paginated tools, do NOT inform the user about pagination details.
+You accomplish a given task iteratively, breaking it down into clear steps and working through them methodically. The general workflow is:
 
-Output markdown WITHOUT HTML tags (e.g. NO `<br>` tags). If some output requires HTML to be properly formatted, ALWAYS fall back to closest non-HTML markdown formatting.
+1. Clearly understand the task and plan clear, achievable goals to accomplish it. Prioritize these goals in a logical order.
+2. Use tools to collect required information to achieve your goals. List most important findings and modify your plan if new information contradicts your existing plan. Repeat until you have the information you need to achieve your goals, or until you have no clear way to collect remaining information.
+3. Give clear and detailed response to the question asked (if any); if asked for modifications, give summary of changes you will make (only a few examples if many).
+4. If asked for modifications, perform these in bulk.
+
+Rules:
+
+- At steps #2 and #4, perform as many tool calls as you know are necessary. For tools with paginated outputs, don't request more than one page in a single turn (good: invoking different tools with paginated outputs, or same tool with different filtering parameters; bad: same tool with same filtering parameters but for different pages); use your next turn to ask for next page if necessary.
+- The user may provide feedback, which you can use to make improvements and try again. But DO NOT continue in pointless back and forth conversations, i.e. don't end your responses with questions or offers for further assistance.
+- When using paginated tools, do NOT inform the user about pagination details.
+- Output markdown WITHOUT HTML tags (e.g. NO `<br>` tags). If some output requires HTML to be properly formatted, ALWAYS fall back to closest non-HTML markdown formatting.
+- When about to call tools, end your text with period, not colon.
 """.strip()
+
+# Shown before first tokens
+_STARTING_RESPONSE_PLACEHOLDER = "●"
 
 # Summarization configuration
 TOKENS_THRESHOLD_FOR_SUMMARIZATION = 150_000
@@ -89,8 +104,17 @@ class CopilotTask(Task):
         }
 
         copilot_model = self._ctx.copilot_model
+
+        # Track message ID to add spaces when new message starts.
+        last_message_id: ty.Optional[str] = None
+
+        # Track tool calls across chunks
+        tool_call_ids = set[str]()
+
         # Add empty AI message to start filling
-        copilot_model.messages.append(Message("AI", ""))
+        copilot_model.messages.append(
+            Message("AI", _STARTING_RESPONSE_PLACEHOLDER)
+        )
         copilot_model.is_active = True
         copilot_model.notify_update()
 
@@ -108,23 +132,42 @@ class CopilotTask(Task):
                     message_chunk, str
                 ):
                     continue
-                if message_metadata["langgraph_node"] == "model":
-                    await logger.adebug(
-                        "Received message chunk",
-                        content=message_chunk.content,
+
+                await logger.adebug(
+                    "Received message chunk",
+                    chunk=message_chunk,
+                )
+
+                if isinstance(message_chunk, AIMessageChunk):
+                    # Clear placeholder
+                    if (
+                        message_chunk.text
+                        and copilot_model.messages[-1].text
+                        == _STARTING_RESPONSE_PLACEHOLDER
+                    ):
+                        copilot_model.messages[-1].text = ""
+
+                    # New paragraph if this is a new message (after tool calls).
+                    if message_chunk.id is not None:
+                        if (
+                            last_message_id is not None
+                            and last_message_id != message_chunk.id
+                        ):
+                            copilot_model.messages[-1].text += "\n\n"
+                        last_message_id = message_chunk.id
+
+                    # Add text
+                    copilot_model.messages[-1].text += message_chunk.text
+
+                    # Count tool calls
+                    tool_call_ids.update(
+                        tool_chunk["id"]
+                        for tool_chunk in message_chunk.tool_call_chunks
+                        if "id" in tool_chunk and tool_chunk["id"] is not None
                     )
-                    match message_chunk.content:
-                        case list():
-                            for content_part in message_chunk.content:
-                                copilot_model.messages[
-                                    -1
-                                ].text += content_part.get("text", "")
-                                copilot_model.notify_update()
-                        case _:
-                            copilot_model.messages[
-                                -1
-                            ].text += message_chunk.content
-                            copilot_model.notify_update()
+                    copilot_model.messages[-1].tool_count = len(tool_call_ids)
+
+                    copilot_model.notify_update()
 
                 if copilot_model.stop_requested:
                     await logger.ainfo("Stop requested by user")
@@ -138,10 +181,17 @@ class CopilotTask(Task):
                 and copilot_model.messages[-1].sender == "AI"
             ):
                 # Replace the empty AI message with an error message
-                copilot_model.messages[-1].text = (
-                    "I encountered an error while processing your request. "
-                    "Please try again or rephrase your question."
-                )
+                if (
+                    copilot_model.messages[-1].text
+                    == _STARTING_RESPONSE_PLACEHOLDER
+                ):
+                    copilot_model.messages[-1].text = ""
+
+                if copilot_model.messages[-1].text:
+                    copilot_model.messages[-1].text += "\n\n"
+
+                text_for_user = exception_to_user_message(e)
+                copilot_model.messages[-1].text += f"**{text_for_user}**"
 
     async def _create_agent(
         self, copilot_config: CopilotConfig, checkpointer: InMemorySaver
@@ -174,6 +224,8 @@ class CopilotTask(Task):
                 ],
             )
             computed_additional_params["credentials"] = credentials
+        if "max_retries" not in additional_params:
+            additional_params["max_retries"] = 4
         llm = init_chat_model(
             copilot_config.model_name,
             model_provider=copilot_config.model_provider,
@@ -209,3 +261,49 @@ class CopilotTask(Task):
             middleware=[tool_error_handler, summarization_middleware],
             debug=self._ctx.plugin_config.log_level == "DEBUG",
         )
+
+
+def exception_to_user_message(exception: Exception) -> str:
+    """
+    Translate an exception into a user-facing error message for the copilot chat.
+    """
+    if _is_rate_limit_Error(exception):
+        return "This request was rate-limited. Please try again soon."
+
+    return (
+        "I encountered an error while processing your request. "
+        "Please try again or rephrase your question."
+    )
+
+
+def _is_rate_limit_Error(exception: Exception) -> bool:
+    if isinstance(
+        exception,
+        (
+            google.api_core.exceptions.TooManyRequests,
+            google.api_core.exceptions.ResourceExhausted,
+            openai.RateLimitError,
+            anthropic.RateLimitError,
+        ),
+    ):
+        return True
+
+    if (
+        isinstance(exception, botocore.exceptions.ClientError)
+        and exception.response.get("Error", {}).get("Code")
+        == "ThrottlingException"
+    ):
+        return True
+
+    if (
+        isinstance(exception, ollama.ResponseError)
+        and exception.status_code == 429
+    ):
+        return True
+
+    # Fallback heuristic for other providers
+    exception_str = str(exception).lower()
+    if "rate" in exception_str and "limit" in exception_str:
+        return True
+
+    return False
