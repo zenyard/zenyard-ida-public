@@ -6,6 +6,7 @@ import ida_lines
 import ida_nalt
 from decompai_client import SwiftSpeculation
 from decompai_client import TranslationProfile
+from decompai_client.models.not_swift import NotSwift
 from decompai_client.models.swift_function import SwiftFunction
 from decompai_ida.model import Model
 
@@ -48,6 +49,19 @@ def find_latest_swift_function_inference_sync(
         if swift_function is not None:
             return swift_function
     return None
+
+
+def find_latest_not_swift_inference_sync(
+    model: Model, address: int
+) -> ty.Optional[NotSwift]:
+    return next(
+        (
+            inference
+            for inference in model.inferences.read_sync(address)
+            if isinstance(inference, NotSwift)
+        ),
+        None,
+    )
 
 
 def is_swift_binary_sync() -> bool:

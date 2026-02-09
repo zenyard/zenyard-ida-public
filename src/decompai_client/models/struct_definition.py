@@ -17,21 +17,32 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt
+from pydantic import BaseModel, ConfigDict, StrictStr, field_validator
 from typing import Any, ClassVar, Dict, List, Optional
-from decompai_client.models.copilot_config import CopilotConfig
+from decompai_client.models.field_definition import FieldDefinition
 from typing import Optional, Set
 from typing_extensions import Self
 
-class UserConfig(BaseModel):
+class StructDefinition(BaseModel):
     """
-    UserConfig
+    StructDefinition
     """ # noqa: E501
-    copilot: Optional[CopilotConfig] = None
-    max_binary_size_mb: Optional[StrictInt] = 10
-    swiftglow_enabled: Optional[StrictBool] = False
-    struct_reconstruction_enabled: Optional[StrictBool] = False
-    __properties: ClassVar[List[str]] = ["copilot", "max_binary_size_mb", "swiftglow_enabled", "struct_reconstruction_enabled"]
+    type: Optional[StrictStr] = 'struct_definition'
+    id: StrictStr
+    name: StrictStr
+    field_definitions: List[FieldDefinition]
+    merged_from: Optional[List[StrictStr]] = None
+    __properties: ClassVar[List[str]] = ["type", "id", "name", "field_definitions", "merged_from"]
+
+    @field_validator('type')
+    def type_validate_enum(cls, value):
+        """Validates the enum"""
+        if value is None:
+            return value
+
+        if value not in set(['struct_definition']):
+            raise ValueError("must be one of enum values ('struct_definition')")
+        return value
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -51,7 +62,7 @@ class UserConfig(BaseModel):
 
     @classmethod
     def from_json(cls, json_str: str) -> Optional[Self]:
-        """Create an instance of UserConfig from a JSON string"""
+        """Create an instance of StructDefinition from a JSON string"""
         return cls.from_dict(json.loads(json_str))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -72,19 +83,18 @@ class UserConfig(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
-        # override the default output from pydantic by calling `to_dict()` of copilot
-        if self.copilot:
-            _dict['copilot'] = self.copilot.to_dict()
-        # set to None if copilot (nullable) is None
-        # and model_fields_set contains the field
-        if self.copilot is None and "copilot" in self.model_fields_set:
-            _dict['copilot'] = None
-
+        # override the default output from pydantic by calling `to_dict()` of each item in field_definitions (list)
+        _items = []
+        if self.field_definitions:
+            for _item_field_definitions in self.field_definitions:
+                if _item_field_definitions:
+                    _items.append(_item_field_definitions.to_dict())
+            _dict['field_definitions'] = _items
         return _dict
 
     @classmethod
     def from_dict(cls, obj: Optional[Dict[str, Any]]) -> Optional[Self]:
-        """Create an instance of UserConfig from a dict"""
+        """Create an instance of StructDefinition from a dict"""
         if obj is None:
             return None
 
@@ -92,10 +102,11 @@ class UserConfig(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "copilot": CopilotConfig.from_dict(obj["copilot"]) if obj.get("copilot") is not None else None,
-            "max_binary_size_mb": obj.get("max_binary_size_mb") if obj.get("max_binary_size_mb") is not None else 10,
-            "swiftglow_enabled": obj.get("swiftglow_enabled") if obj.get("swiftglow_enabled") is not None else False,
-            "struct_reconstruction_enabled": obj.get("struct_reconstruction_enabled") if obj.get("struct_reconstruction_enabled") is not None else False
+            "type": obj.get("type") if obj.get("type") is not None else 'struct_definition',
+            "id": obj.get("id"),
+            "name": obj.get("name"),
+            "field_definitions": [FieldDefinition.from_dict(_item) for _item in obj["field_definitions"]] if obj.get("field_definitions") is not None else None,
+            "merged_from": obj.get("merged_from")
         })
         return _obj
 

@@ -12,6 +12,7 @@ import typing_extensions as tye
 from decompai_client import (
     FunctionOverview,
     Name,
+    NotSwift,
     ParametersMapping,
     VariablesMapping,
     SwiftFunction,
@@ -76,7 +77,7 @@ def _apply_inferences_for_address(
                     _apply_parameters(inference, model=model)
                 elif isinstance(inference, VariablesMapping):
                     _apply_variables(inference, model=model)
-                elif isinstance(inference, SwiftFunction):
+                elif isinstance(inference, (SwiftFunction, NotSwift)):
                     # Nothing to do - inference read from model when needed.
                     pass
                 else:

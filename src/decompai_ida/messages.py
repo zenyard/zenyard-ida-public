@@ -1,7 +1,9 @@
 from inspect import cleandoc
 from pathlib import Path
+import typing as ty
 
 import ida_kernwin
+from decompai_client.models.swift_rejection_reason import SwiftRejectionReason
 
 from decompai_ida import ida_tasks
 
@@ -59,10 +61,23 @@ async def warn_binary_exceeds_max_size(*, max_size_mb: int):
     await ida_tasks.run_ui(ida_kernwin.warning, message)
 
 
-def inform_no_swift_source_code_sync():
-    ida_kernwin.info(
-        "AUTOHIDE NONE\nThis function doesn't have Swift source code."
-    )
+def inform_no_swift_source_code_sync(
+    reason: ty.Optional[SwiftRejectionReason] = None,
+) -> None:
+    if reason == SwiftRejectionReason.TOO_SHORT:
+        message = (
+            "This function was not analyzed as Swift since it's too short."
+        )
+    elif reason == SwiftRejectionReason.HAS_NON_SWIFT_NAME:
+        message = "This function was not analyzed as Swift since it has non-Swift name."
+    elif reason == SwiftRejectionReason.COMPILER_GENERATED:
+        message = "This function was not analyzed as Swift since it's likely auto-generated."
+    elif reason == SwiftRejectionReason.DOESNT_LOOK_LIKE_SWIFT:
+        message = "This function was not analyzed as Swift since it's not conclusively Swift."
+    else:
+        message = "This function doesn't have Swift source code."
+
+    ida_kernwin.info(f"AUTOHIDE NONE\n{message}")
 
 
 def warn_cant_open_swift_pseudocode_sync():

@@ -22,8 +22,7 @@ import idc
 import idautils
 
 from decompai_ida import ida_tasks, logger
-from decompai_ida.tasks import ForegroundTask, TaskContext
-from decompai_ida.wait_box import WaitBox
+from decompai_ida.tasks import ForegroundTask
 from decompai_ida.warning_auto_dismisser import auto_dismiss_warnings
 
 _PREPROCESSING_WAITBOX_TEXT = cleandoc("""
@@ -165,15 +164,28 @@ class PreprocessingTask(ForegroundTask):
     data, then recreates minimal sparse segments with this information.
     """
 
-    def __init__(self, task_context: TaskContext, wait_box: WaitBox):
-        super().__init__(task_context, wait_box)
-
     def _run(self):
-        logger.info("Starting preprocessing task")
-
         try:
-            self._preprocess_dyld_repair_memory_errors()
-            _remove_brk_functions()
+            try:
+                self._preprocess_dyld_repair_memory_errors()
+            except Exception as ex:
+                logger.warning("Failed repairing memory errors", exc_info=ex)
+
+            try:
+                _remove_brk_functions()
+            except Exception as ex:
+                logger.warning("Failed removing brk functions", exc_info=ex)
+
+            try:
+                from swift_tools.enrichments import run_global_enrichments  # type: ignore
+
+                logger.info("Running ST")
+                run_global_enrichments()
+            except ImportError:
+                logger.info("Skipped running ST (not found)")
+            except Exception as ex:
+                logger.warning("Failed removing brk functions", exc_info=ex)
+
             logger.info("Preprocessing task completed successfully")
         finally:
             self._mark_ready_for_analysis()

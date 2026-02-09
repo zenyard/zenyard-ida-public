@@ -17,21 +17,23 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
-from decompai_client.models.copilot_config import CopilotConfig
+from typing_extensions import Annotated
+from decompai_client.models.plan_config import PlanConfig
+from decompai_client.models.user_config_request import UserConfigRequest
 from typing import Optional, Set
 from typing_extensions import Self
 
-class UserConfig(BaseModel):
+class CreateUserRequest(BaseModel):
     """
-    UserConfig
+    CreateUserRequest
     """ # noqa: E501
-    copilot: Optional[CopilotConfig] = None
-    max_binary_size_mb: Optional[StrictInt] = 10
-    swiftglow_enabled: Optional[StrictBool] = False
-    struct_reconstruction_enabled: Optional[StrictBool] = False
-    __properties: ClassVar[List[str]] = ["copilot", "max_binary_size_mb", "swiftglow_enabled", "struct_reconstruction_enabled"]
+    email: StrictStr
+    name: Annotated[str, Field(min_length=1, strict=True)]
+    config: Optional[UserConfigRequest] = None
+    plan: PlanConfig
+    __properties: ClassVar[List[str]] = ["email", "name", "config", "plan"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -51,7 +53,7 @@ class UserConfig(BaseModel):
 
     @classmethod
     def from_json(cls, json_str: str) -> Optional[Self]:
-        """Create an instance of UserConfig from a JSON string"""
+        """Create an instance of CreateUserRequest from a JSON string"""
         return cls.from_dict(json.loads(json_str))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -72,19 +74,17 @@ class UserConfig(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
-        # override the default output from pydantic by calling `to_dict()` of copilot
-        if self.copilot:
-            _dict['copilot'] = self.copilot.to_dict()
-        # set to None if copilot (nullable) is None
-        # and model_fields_set contains the field
-        if self.copilot is None and "copilot" in self.model_fields_set:
-            _dict['copilot'] = None
-
+        # override the default output from pydantic by calling `to_dict()` of config
+        if self.config:
+            _dict['config'] = self.config.to_dict()
+        # override the default output from pydantic by calling `to_dict()` of plan
+        if self.plan:
+            _dict['plan'] = self.plan.to_dict()
         return _dict
 
     @classmethod
     def from_dict(cls, obj: Optional[Dict[str, Any]]) -> Optional[Self]:
-        """Create an instance of UserConfig from a dict"""
+        """Create an instance of CreateUserRequest from a dict"""
         if obj is None:
             return None
 
@@ -92,10 +92,10 @@ class UserConfig(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "copilot": CopilotConfig.from_dict(obj["copilot"]) if obj.get("copilot") is not None else None,
-            "max_binary_size_mb": obj.get("max_binary_size_mb") if obj.get("max_binary_size_mb") is not None else 10,
-            "swiftglow_enabled": obj.get("swiftglow_enabled") if obj.get("swiftglow_enabled") is not None else False,
-            "struct_reconstruction_enabled": obj.get("struct_reconstruction_enabled") if obj.get("struct_reconstruction_enabled") is not None else False
+            "email": obj.get("email"),
+            "name": obj.get("name"),
+            "config": UserConfigRequest.from_dict(obj["config"]) if obj.get("config") is not None else None,
+            "plan": PlanConfig.from_dict(obj["plan"]) if obj.get("plan") is not None else None
         })
         return _obj
 

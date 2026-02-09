@@ -68,12 +68,18 @@ try:
     from decompai_ida.ui.swift_ui_task import SwiftUiTask
     from decompai_ida.ui.functions_colorizer_task import FunctionsColorizerTask
     from decompai_ida.ui.zenyard_menu_task import ZenyardMenuTask
+    from decompai_ida.ui.analyze_as_swift_task import AnalyzeAsSwiftTask
+    from decompai_ida.ui.apply_queued_inferences_action_task import (
+        ApplyQueuedInferencesActionTask,
+    )
 
     _UI_GLOBAL_TASKS = [
         ZenyardMenuTask,
     ]
 
     _UI_TASKS = [
+        AnalyzeAsSwiftTask,
+        ApplyQueuedInferencesActionTask,
         CopilotUiTask,
         FunctionsColorizerTask,
         SwiftUiTask,

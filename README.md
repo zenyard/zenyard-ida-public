@@ -1,6 +1,6 @@
 # Pre-requisites
 
-- IDA 9 Pro.
+- IDA 9 Pro or newer.
 - Python 3.10 or newer with Pip. Use `idapyswitch` (in your IDA installation
   folder) to configure which Python environment is used by IDA. Note that IDA
   versions are incompatible with later Python releases.
@@ -11,12 +11,17 @@
 Switch IDA console from **IDC** to **Python**, and run the following:
 
 ```python
+try:
+  from pip._vendor import truststore; truststore.inject_into_ssl()
+except: pass
 GIT_TOKEN="<GIT_TOKEN>"; import urllib.request; import base64; req = urllib.request.Request("https://raw.githubusercontent.com/zenyard/decompai-ida-public/main/install_from_ida.py"); req.add_header("Authorization", f"Basic {base64.b64encode(GIT_TOKEN.encode('utf-8')).decode('utf-8')}"); exec(urllib.request.urlopen(req).read())
 ```
 
 This will run a script performing the steps in next section.
 
 # Manual installation
+
+**Note:** by following these steps, you accept [Zenyard Terms of Service](https://www.zenyard.ai/eula).
 
 - Install package in same Python environment used by IDA:
 
@@ -38,19 +43,4 @@ This will run a script performing the steps in next section.
 - Add the `decompai.json` to [`$IDAUSR/`][1] folder, and replace `<API KEY>`
   with your API key.
 
-# IDA & Python compatibility
-
-IDA versions are incompatible with later Python releases. If upgrading IDA or
-downgrading Python used by IDA isn't an option, you may try to work around the
-issue by installing `PyQt5` using `pip` -
-
-```sh
-pip install PyQt5
-```
-
-Ensure that the `pip` command is of the Python used by IDA.
-
-> **Warning:** This workaround is **unsupported** and may lead to instability.
-
-[1]:
-  https://hex-rays.com/blog/igors-tip-of-the-week-33-idas-user-directory-idausr
+[1]: https://hex-rays.com/blog/igors-tip-of-the-week-33-idas-user-directory-idausr

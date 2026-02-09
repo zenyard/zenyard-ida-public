@@ -1,11 +1,13 @@
+import typing as ty
+from abc import abstractmethod
 from dataclasses import dataclass
 from inspect import cleandoc
 
 from decompai_ida import ida_tasks, inferences, logger, objects
 from decompai_ida.object_graph import get_objects_in_approx_topo_order_sync
-from decompai_ida.model import Revision, SyncStatus
-from decompai_ida.tasks import ForegroundTask, TaskContext
-from decompai_ida.wait_box import WaitBox
+from decompai_ida.model import Object, Revision, SyncStatus
+from decompai_ida.objects import Symbol
+from decompai_ida.tasks import ForegroundTask
 
 _SCANNING_WAITBOX_TEXT = cleandoc("""
     Zenyard is Preparing
@@ -20,38 +22,35 @@ _QUEUEING_WAITBOX_TEXT = cleandoc("""
 """)
 
 
-class QueueRevisionsTask(ForegroundTask):
+@dataclass
+class _BufferedObject:
+    address: int
+    object: Object
+    hash: bytes
+
+
+class BaseQueueRevisionsTask(ForegroundTask):
     """
-    Foreground task which scans database for changed objects and pushes them
-    into revision queue in topological order.
-
-    Updates sync status and initial analysis status accordingly.
+    Base class for foreground tasks that scan objects and push them into the
+    revision queue in topological order.
     """
 
-    def __init__(self, task_context: TaskContext, wait_box: WaitBox):
-        super().__init__(task_context, wait_box)
-        self._buffer = list["_BufferedObject"]()
-
-    def _run(self):
-        self._is_initial_upload = not (
-            self._ctx.model.initial_upload_complete.get_sync()
-        )
+    def _run(self) -> None:
+        self._buffer = list[_BufferedObject]()
 
         self._wait_box.start_new_task(_SCANNING_WAITBOX_TEXT)
 
-        dirty_addresses = get_objects_in_approx_topo_order_sync(
-            self._find_dirty_symbols()
+        addresses = get_objects_in_approx_topo_order_sync(
+            self._get_symbols_to_queue()
         )
-        logger.debug(
-            "Scanned for dirty addresses", dirty_count=len(dirty_addresses)
-        )
+        logger.debug("Scanned for addresses to queue", count=len(addresses))
 
         self._wait_box.start_new_task(
             _QUEUEING_WAITBOX_TEXT,
-            items=len(dirty_addresses),
+            items=len(addresses),
         )
 
-        for address in dirty_addresses:
+        for address in addresses:
             self._buffer_object_if_changed(address)
             if (
                 len(self._buffer)
@@ -64,9 +63,6 @@ class QueueRevisionsTask(ForegroundTask):
         if len(self._buffer) > 0:
             self._flush_revision()
 
-        self._ctx.model.database_dirty.set_sync(False)
-        if self._is_initial_upload:
-            self._ctx.model.initial_upload_complete.set_sync(True)
         self._ctx.model.notify_update()
 
     def _buffer_object_if_changed(self, address: int) -> None:
@@ -111,11 +107,10 @@ class QueueRevisionsTask(ForegroundTask):
         logger.info("Queueing revision", object_count=len(self._buffer))
 
         self._ctx.model.revision_queue.push_sync(
-            Revision(
-                objects=tuple(
+            self._create_revision(
+                tuple(
                     buffered_object.object for buffered_object in self._buffer
-                ),
-                is_initial_analysis=self._is_initial_upload,
+                )
             )
         )
 
@@ -130,7 +125,34 @@ class QueueRevisionsTask(ForegroundTask):
         self._buffer.clear()
         self._ctx.model.notify_update()
 
-    def _find_dirty_symbols(self):
+    @abstractmethod
+    def _get_symbols_to_queue(self) -> ty.Iterable[Symbol]: ...
+
+    @abstractmethod
+    def _create_revision(self, objects: tuple[Object, ...]) -> Revision: ...
+
+
+class QueueRevisionsTask(BaseQueueRevisionsTask):
+    """
+    Foreground task which scans database for changed objects and pushes them
+    into revision queue in topological order.
+
+    Updates sync status and initial analysis status accordingly.
+    """
+
+    def _run(self) -> None:
+        self._is_initial_upload = not (
+            self._ctx.model.initial_upload_complete.get_sync()
+        )
+
+        super()._run()
+
+        self._ctx.model.database_dirty.set_sync(False)
+        if self._is_initial_upload:
+            self._ctx.model.initial_upload_complete.set_sync(True)
+        self._ctx.model.notify_update()
+
+    def _get_symbols_to_queue(self) -> ty.Iterable[Symbol]:
         for symbol in objects.all_object_symbols_sync():
             sync_status = (
                 self._ctx.model.sync_status.get_sync(symbol.address)
@@ -138,9 +160,7 @@ class QueueRevisionsTask(ForegroundTask):
             if sync_status.dirty:
                 yield symbol
 
-
-@dataclass
-class _BufferedObject:
-    address: int
-    object: objects.Object
-    hash: bytes
+    def _create_revision(self, objects: tuple[Object, ...]) -> Revision:
+        return Revision(
+            objects=objects, is_initial_analysis=self._is_initial_upload
+        )

@@ -19,7 +19,7 @@ class TriggerApplyInferencesTask(Task):
             if await ida_tasks.run(self._should_trigger_sync):
                 await logger.ainfo("Triggering apply inferences")
                 self._ctx.model.runtime_status.queue_foreground_task_if_not_already_queued(
-                    ApplyInferencesTask
+                    ApplyInferencesTask()
                 )
                 self._ctx.model.runtime_status.apply_inferences_when_ready = (
                     False

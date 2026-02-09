@@ -13,6 +13,7 @@ from decompai_ida import ida_tasks, logger, messages, lines
 from decompai_ida.async_utils import wait_until_cancelled
 from decompai_ida.model import Model
 from decompai_ida.swift_utils import (
+    find_latest_not_swift_inference_sync,
     find_latest_swift_function_inference_per_profile_sync,
     find_latest_swift_function_inference_sync,
 )
@@ -65,7 +66,13 @@ class OpenSwiftActionHandler(ida_kernwin.action_handler_t):
                 )
             )
             if not swift_function_inference_per_profile:
-                messages.inform_no_swift_source_code_sync()
+                not_swift = find_latest_not_swift_inference_sync(
+                    model=self._model,
+                    address=ctx.cur_func.start_ea,
+                )
+                messages.inform_no_swift_source_code_sync(
+                    reason=not_swift.reason if not_swift else None
+                )
                 return 1
 
             action_id = getattr(ctx, "action", None)

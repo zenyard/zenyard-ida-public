@@ -22,7 +22,7 @@ from typing_extensions import Annotated
 from decompai_client.models.add_objects_to_current_revision_params import AddObjectsToCurrentRevisionParams
 from decompai_client.models.binary_status import BinaryStatus
 from decompai_client.models.create_revision_params import CreateRevisionParams
-from decompai_client.models.finish_and_analyze_current_revision_params import FinishAndAnalyzeCurrentRevisionParams
+from decompai_client.models.finish_and_analyze_current_revision_body import FinishAndAnalyzeCurrentRevisionBody
 from decompai_client.models.get_binary_status_response import GetBinaryStatusResponse
 from decompai_client.models.get_inferences_response import GetInferencesResponse
 from decompai_client.models.post_binary_body import PostBinaryBody
@@ -903,7 +903,7 @@ class BinariesApi:
     async def finish_and_analyze_current_revision(
         self,
         binary_id: StrictStr,
-        finish_and_analyze_current_revision_params: FinishAndAnalyzeCurrentRevisionParams,
+        finish_and_analyze_current_revision_body: FinishAndAnalyzeCurrentRevisionBody,
         _request_timeout: Union[
             None,
             Annotated[StrictFloat, Field(gt=0)],
@@ -922,8 +922,8 @@ class BinariesApi:
 
         :param binary_id: (required)
         :type binary_id: str
-        :param finish_and_analyze_current_revision_params: (required)
-        :type finish_and_analyze_current_revision_params: FinishAndAnalyzeCurrentRevisionParams
+        :param finish_and_analyze_current_revision_body: (required)
+        :type finish_and_analyze_current_revision_body: FinishAndAnalyzeCurrentRevisionBody
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -948,7 +948,7 @@ class BinariesApi:
 
         _param = self._finish_and_analyze_current_revision_serialize(
             binary_id=binary_id,
-            finish_and_analyze_current_revision_params=finish_and_analyze_current_revision_params,
+            finish_and_analyze_current_revision_body=finish_and_analyze_current_revision_body,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -974,7 +974,7 @@ class BinariesApi:
     async def finish_and_analyze_current_revision_with_http_info(
         self,
         binary_id: StrictStr,
-        finish_and_analyze_current_revision_params: FinishAndAnalyzeCurrentRevisionParams,
+        finish_and_analyze_current_revision_body: FinishAndAnalyzeCurrentRevisionBody,
         _request_timeout: Union[
             None,
             Annotated[StrictFloat, Field(gt=0)],
@@ -993,8 +993,8 @@ class BinariesApi:
 
         :param binary_id: (required)
         :type binary_id: str
-        :param finish_and_analyze_current_revision_params: (required)
-        :type finish_and_analyze_current_revision_params: FinishAndAnalyzeCurrentRevisionParams
+        :param finish_and_analyze_current_revision_body: (required)
+        :type finish_and_analyze_current_revision_body: FinishAndAnalyzeCurrentRevisionBody
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -1019,7 +1019,7 @@ class BinariesApi:
 
         _param = self._finish_and_analyze_current_revision_serialize(
             binary_id=binary_id,
-            finish_and_analyze_current_revision_params=finish_and_analyze_current_revision_params,
+            finish_and_analyze_current_revision_body=finish_and_analyze_current_revision_body,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -1045,7 +1045,7 @@ class BinariesApi:
     async def finish_and_analyze_current_revision_without_preload_content(
         self,
         binary_id: StrictStr,
-        finish_and_analyze_current_revision_params: FinishAndAnalyzeCurrentRevisionParams,
+        finish_and_analyze_current_revision_body: FinishAndAnalyzeCurrentRevisionBody,
         _request_timeout: Union[
             None,
             Annotated[StrictFloat, Field(gt=0)],
@@ -1064,8 +1064,8 @@ class BinariesApi:
 
         :param binary_id: (required)
         :type binary_id: str
-        :param finish_and_analyze_current_revision_params: (required)
-        :type finish_and_analyze_current_revision_params: FinishAndAnalyzeCurrentRevisionParams
+        :param finish_and_analyze_current_revision_body: (required)
+        :type finish_and_analyze_current_revision_body: FinishAndAnalyzeCurrentRevisionBody
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -1090,7 +1090,7 @@ class BinariesApi:
 
         _param = self._finish_and_analyze_current_revision_serialize(
             binary_id=binary_id,
-            finish_and_analyze_current_revision_params=finish_and_analyze_current_revision_params,
+            finish_and_analyze_current_revision_body=finish_and_analyze_current_revision_body,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -1111,7 +1111,7 @@ class BinariesApi:
     def _finish_and_analyze_current_revision_serialize(
         self,
         binary_id,
-        finish_and_analyze_current_revision_params,
+        finish_and_analyze_current_revision_body,
         _request_auth,
         _content_type,
         _headers,
@@ -1139,8 +1139,8 @@ class BinariesApi:
         # process the header parameters
         # process the form parameters
         # process the body parameter
-        if finish_and_analyze_current_revision_params is not None:
-            _body_params = finish_and_analyze_current_revision_params
+        if finish_and_analyze_current_revision_body is not None:
+            _body_params = finish_and_analyze_current_revision_body
 
 
         # set the HTTP header `Accept`

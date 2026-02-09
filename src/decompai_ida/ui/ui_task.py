@@ -66,18 +66,18 @@ class UiTask(Task):
         await logger.get().ainfo("Upload requested")
         if await self._ctx.model.asked_initial_questions.get():
             self._ctx.model.runtime_status.queue_foreground_task_if_not_already_queued(
-                QueueRevisionsTask
+                QueueRevisionsTask()
             )
         else:
             self._ctx.model.runtime_status.queue_foreground_task_if_not_already_queued(
-                ShowInitialQuestionsTask
+                ShowInitialQuestionsTask()
             )
         self._ctx.model.notify_update()
 
     async def _on_save_results_clicked(self):
         await logger.get().ainfo("Save results requested")
         self._ctx.model.runtime_status.queue_foreground_task_if_not_already_queued(
-            ApplyInferencesTask
+            ApplyInferencesTask()
         )
         self._ctx.model.notify_update()
 

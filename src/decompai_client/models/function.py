@@ -42,7 +42,8 @@ class Function(BaseModel):
     ranges: Optional[List[Range]] = None
     line_ranges: Optional[List[LineRange]] = None
     decompiler_notes: Optional[List[DecompilerNote]] = None
-    __properties: ClassVar[List[str]] = ["address", "type", "name", "has_known_name", "mangled_name", "inference_seq_number", "code", "calls", "data_refs_to", "ranges", "line_ranges", "decompiler_notes"]
+    analyze_as_swift: Optional[StrictBool] = None
+    __properties: ClassVar[List[str]] = ["address", "type", "name", "has_known_name", "mangled_name", "inference_seq_number", "code", "calls", "data_refs_to", "ranges", "line_ranges", "decompiler_notes", "analyze_as_swift"]
 
     @field_validator('address')
     def address_validate_regular_expression(cls, value):
@@ -131,6 +132,11 @@ class Function(BaseModel):
         if self.line_ranges is None and "line_ranges" in self.model_fields_set:
             _dict['line_ranges'] = None
 
+        # set to None if analyze_as_swift (nullable) is None
+        # and model_fields_set contains the field
+        if self.analyze_as_swift is None and "analyze_as_swift" in self.model_fields_set:
+            _dict['analyze_as_swift'] = None
+
         return _dict
 
     @classmethod
@@ -154,7 +160,8 @@ class Function(BaseModel):
             "data_refs_to": obj.get("data_refs_to"),
             "ranges": [Range.from_dict(_item) for _item in obj["ranges"]] if obj.get("ranges") is not None else None,
             "line_ranges": [LineRange.from_dict(_item) for _item in obj["line_ranges"]] if obj.get("line_ranges") is not None else None,
-            "decompiler_notes": [DecompilerNote.from_dict(_item) for _item in obj["decompiler_notes"]] if obj.get("decompiler_notes") is not None else None
+            "decompiler_notes": [DecompilerNote.from_dict(_item) for _item in obj["decompiler_notes"]] if obj.get("decompiler_notes") is not None else None,
+            "analyze_as_swift": obj.get("analyze_as_swift")
         })
         return _obj
 

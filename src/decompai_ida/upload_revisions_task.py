@@ -6,7 +6,7 @@ import structlog
 from decompai_client import (
     AddObjectsToCurrentRevisionParams,
     CreateRevisionParams,
-    FinishAndAnalyzeCurrentRevisionParams,
+    FinishAndAnalyzeCurrentRevisionBody,
     Object as ApiObject,
 )
 from decompai_ida import ida_tasks, logger
@@ -96,8 +96,9 @@ class UploadRevisionsTask(Task):
             await self._retry_api_request_forever(
                 lambda: self._ctx.binaries_api.finish_and_analyze_current_revision(
                     binary_id=binary_id,
-                    finish_and_analyze_current_revision_params=FinishAndAnalyzeCurrentRevisionParams(
+                    finish_and_analyze_current_revision_body=FinishAndAnalyzeCurrentRevisionBody(
                         analyze_dependents=analyze_dependents,
+                        swift_only=revision.swift_only,
                     ),
                 ),
                 description=f"Finish revision {next_revision}",

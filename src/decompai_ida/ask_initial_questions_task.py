@@ -66,13 +66,13 @@ class ShowInitialQuestionsTask(ForegroundTask):
 
         if form_result.allow_preprocessing:
             self._ctx.model.runtime_status.queue_foreground_task_if_not_already_queued(
-                PreprocessingTask
+                PreprocessingTask()
             )
         else:
             # Preprocessing skipped, ready for upload
             self._ctx.model.ready_for_analysis.set_sync(True)
         self._ctx.model.runtime_status.queue_foreground_task_if_not_already_queued(
-            QueueRevisionsTask
+            QueueRevisionsTask()
         )
 
         # Save binary instructions
@@ -105,7 +105,7 @@ class AskInitialQuestions(Task):
         # Queue the foreground task to show the dialog
         await logger.get().ainfo("Queueing initial questions dialog")
         self._ctx.model.runtime_status.queue_foreground_task_if_not_already_queued(
-            ShowInitialQuestionsTask
+            ShowInitialQuestionsTask()
         )
 
 

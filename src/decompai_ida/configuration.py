@@ -56,6 +56,9 @@ class PluginConfiguration(BaseModel, frozen=True):
 
     show_initial_upload_message: bool = True
 
+    # Kept here so we don't override value from installer
+    accepted_eula_version: ty.Optional[int] = None
+
     def with_user_config(
         self,
         *,

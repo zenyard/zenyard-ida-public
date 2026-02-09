@@ -24,7 +24,7 @@ from decompai_client.models import (
     DecompilerNote,
 )
 from decompai_ida import api, inferences, lines, logger
-from decompai_ida.model import Model, Object
+from decompai_ida.model import AddressUserOptions, Model, Object
 from decompai_ida.transform_code import transform_code
 
 _IGNORED_SEGMENTS = {
@@ -35,6 +35,7 @@ _IGNORED_SEGMENTS = {
     ".got",
     "__stubs",
     "__objc_stubs",
+    "__auth_stubs",
     # TODO: PE, Mach-O segments?
 }
 
@@ -243,6 +244,10 @@ def read_object_sync(
                 line_ranges=list(_get_line_ranges_for_func(decompiled)),
                 mangled_name=mangled_name,
                 decompiler_notes=list(_get_decompiler_notes(decompiled)),
+                analyze_as_swift=(
+                    model.address_user_options.get_sync(address)
+                    or AddressUserOptions()
+                ).analyze_as_swift,
             )
 
     validate_object(result)
@@ -292,9 +297,13 @@ def hash_object(obj: Object) -> bytes:
     return hashlib.blake2b(data, digest_size=8).digest()
 
 
+def _is_ignored_segment_name(name: str) -> bool:
+    return name.split(":")[-1] in _IGNORED_SEGMENTS
+
+
 def is_in_ignored_segment_sync(address: int) -> bool:
     segment = ida_segment.getseg(address)
-    return ida_segment.get_segm_name(segment) in _IGNORED_SEGMENTS
+    return _is_ignored_segment_name(ida_segment.get_segm_name(segment))
 
 
 def _is_object_segment(segment: ida_segment.segment_t) -> bool:
@@ -302,7 +311,7 @@ def _is_object_segment(segment: ida_segment.segment_t) -> bool:
     if ida_segment.get_segm_class(segment) != "CODE":
         return False
 
-    if ida_segment.get_segm_name(segment) in _IGNORED_SEGMENTS:
+    if _is_ignored_segment_name(ida_segment.get_segm_name(segment)):
         return False
 
     return True

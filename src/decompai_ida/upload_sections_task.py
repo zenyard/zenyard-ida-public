@@ -11,7 +11,7 @@ from anyio import to_thread
 from decompai_client import (
     AddObjectsToCurrentRevisionParams,
     CreateRevisionParams,
-    FinishAndAnalyzeCurrentRevisionParams,
+    FinishAndAnalyzeCurrentRevisionBody,
     Section,
 )
 from decompai_client import Object as ApiObject
@@ -167,8 +167,9 @@ class UploadSectionsTask(Task):
             await self._retry_api_request_forever(
                 lambda: self._ctx.binaries_api.finish_and_analyze_current_revision(
                     binary_id=binary_id,
-                    finish_and_analyze_current_revision_params=FinishAndAnalyzeCurrentRevisionParams(
-                        analyze_dependents=False
+                    finish_and_analyze_current_revision_body=FinishAndAnalyzeCurrentRevisionBody(
+                        analyze_dependents=False,
+                        swift_only=False,
                     ),
                 ),
                 description=f"Finish revision {next_revision}",

@@ -18,6 +18,7 @@ from decompai_client import (
     Function,
     FunctionOverview,
     Name,
+    NotSwift,
     ParametersMapping,
     Thunk,
     UserConfig,
@@ -39,7 +40,12 @@ if ty.TYPE_CHECKING:
 Object: tye.TypeAlias = ty.Union[Function, Thunk, GlobalVariable]
 
 Inference: tye.TypeAlias = ty.Union[
-    FunctionOverview, Name, ParametersMapping, VariablesMapping, SwiftFunction
+    FunctionOverview,
+    Name,
+    ParametersMapping,
+    VariablesMapping,
+    SwiftFunction,
+    NotSwift,
 ]
 
 
@@ -62,6 +68,15 @@ class SyncStatus(BaseModel, frozen=True):
         return SyncStatus(uploaded_hash=self.uploaded_hash, dirty=dirty)
 
 
+class AddressUserOptions(BaseModel, frozen=True):
+    analyze_as_swift: ty.Optional[bool] = None
+
+    def with_analyze_as_swift(
+        self, analyze_as_swift: bool
+    ) -> "AddressUserOptions":
+        return AddressUserOptions(analyze_as_swift=analyze_as_swift)
+
+
 class Revision(BaseModel, frozen=True):
     """
     Revision to be uploaded.
@@ -69,6 +84,7 @@ class Revision(BaseModel, frozen=True):
 
     objects: tuple[Object, ...]
     is_initial_analysis: bool
+    swift_only: bool = False
 
 
 TaskName = ty.Literal[
@@ -93,7 +109,7 @@ class RuntimeStatus:
     apply_inferences_when_ready: bool = False
     connection_failures: dict[str, float] = field(default_factory=dict)
     initial_analysis_complete = False
-    foreground_task_queue: deque[type["ForegroundTask"]] = field(
+    foreground_task_queue: deque["ForegroundTask"] = field(
         default_factory=deque
     )
     foreground_task_active: bool = False
@@ -116,12 +132,13 @@ class RuntimeStatus:
             self.connection_failures[name] = time.monotonic()
 
     def queue_foreground_task_if_not_already_queued(
-        self, new_task_type: type["ForegroundTask"]
+        self, new_task: "ForegroundTask"
     ):
-        # Note - if tasks become parameterized, this should probably replace
-        # existing task.
-        if new_task_type not in self.foreground_task_queue:
-            self.foreground_task_queue.append(new_task_type)
+        for existing in self.foreground_task_queue:
+            if type(existing) is type(new_task):
+                existing.merge_from(new_task)
+                return
+        self.foreground_task_queue.append(new_task)
 
 
 @dataclass
@@ -232,6 +249,9 @@ class Model:
         self.sections_excluded_from_upload = storage.AddressMap(
             "sections_excluded_from_upload", bool
         )
+        self.address_user_options = storage.AddressMap(
+            "address_user_options", AddressUserOptions
+        )
 
     def _notify_update(self) -> None:
         """
@@ -297,3 +317,4 @@ class Model:
         await self.inference_queue.clear()
         await self.tid_to_object.clear()
         await self.sections_excluded_from_upload.clear()
+        await self.address_user_options.clear()

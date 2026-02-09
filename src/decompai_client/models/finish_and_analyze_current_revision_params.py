@@ -17,8 +17,8 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, StrictBool
-from typing import Any, ClassVar, Dict, List
+from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr
+from typing import Any, ClassVar, Dict, List, Optional
 from typing import Optional, Set
 from typing_extensions import Self
 
@@ -27,7 +27,8 @@ class FinishAndAnalyzeCurrentRevisionParams(BaseModel):
     FinishAndAnalyzeCurrentRevisionParams
     """ # noqa: E501
     analyze_dependents: StrictBool
-    __properties: ClassVar[List[str]] = ["analyze_dependents"]
+    allowed_sub_analysis_types: Optional[List[StrictStr]] = None
+    __properties: ClassVar[List[str]] = ["analyze_dependents", "allowed_sub_analysis_types"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -68,6 +69,11 @@ class FinishAndAnalyzeCurrentRevisionParams(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # set to None if allowed_sub_analysis_types (nullable) is None
+        # and model_fields_set contains the field
+        if self.allowed_sub_analysis_types is None and "allowed_sub_analysis_types" in self.model_fields_set:
+            _dict['allowed_sub_analysis_types'] = None
+
         return _dict
 
     @classmethod
@@ -80,7 +86,8 @@ class FinishAndAnalyzeCurrentRevisionParams(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "analyze_dependents": obj.get("analyze_dependents")
+            "analyze_dependents": obj.get("analyze_dependents"),
+            "allowed_sub_analysis_types": obj.get("allowed_sub_analysis_types")
         })
         return _obj
 

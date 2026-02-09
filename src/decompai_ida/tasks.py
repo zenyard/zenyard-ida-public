@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import anyio
 import structlog
+import typing_extensions as tye
 
 from decompai_client import ApiClient, BinariesApi, UserApi
 from decompai_client.exceptions import ForbiddenException, UnauthorizedException
@@ -155,15 +156,16 @@ class ForegroundTask:
     A short-lived task that executes in foreground (while wait box is shown).
     """
 
-    def __init__(self, task_context: TaskContext, wait_box: WaitBox):
+    def run(self, task_context: TaskContext, wait_box: WaitBox) -> None:
         self._ctx = task_context
         self._wait_box = wait_box
-
-    def run(self) -> None:
         with structlog.contextvars.bound_contextvars(
             foreground_task=type(self).__name__
         ):
             return self._run()
+
+    def merge_from(self, other: tye.Self) -> None:
+        pass
 
     @abstractmethod
     def _run(self) -> None: ...

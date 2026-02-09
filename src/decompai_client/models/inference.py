@@ -19,14 +19,18 @@ from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError, f
 from typing import Any, List, Optional
 from decompai_client.models.function_overview import FunctionOverview
 from decompai_client.models.name import Name
+from decompai_client.models.not_swift import NotSwift
+from decompai_client.models.parameter_type import ParameterType
 from decompai_client.models.parameters_mapping import ParametersMapping
+from decompai_client.models.return_type import ReturnType
+from decompai_client.models.struct_definition import StructDefinition
 from decompai_client.models.swift_function import SwiftFunction
 from decompai_client.models.variables_mapping import VariablesMapping
 from pydantic import StrictStr, Field
 from typing import Union, List, Set, Optional, Dict
 from typing_extensions import Literal, Self
 
-INFERENCE_ONE_OF_SCHEMAS = ["FunctionOverview", "Name", "ParametersMapping", "SwiftFunction", "VariablesMapping"]
+INFERENCE_ONE_OF_SCHEMAS = ["FunctionOverview", "Name", "NotSwift", "ParameterType", "ParametersMapping", "ReturnType", "StructDefinition", "SwiftFunction", "VariablesMapping"]
 
 class Inference(BaseModel):
     """
@@ -40,10 +44,18 @@ class Inference(BaseModel):
     oneof_schema_3_validator: Optional[ParametersMapping] = None
     # data type: VariablesMapping
     oneof_schema_4_validator: Optional[VariablesMapping] = None
+    # data type: ParameterType
+    oneof_schema_5_validator: Optional[ParameterType] = None
+    # data type: ReturnType
+    oneof_schema_6_validator: Optional[ReturnType] = None
     # data type: SwiftFunction
-    oneof_schema_5_validator: Optional[SwiftFunction] = None
-    actual_instance: Optional[Union[FunctionOverview, Name, ParametersMapping, SwiftFunction, VariablesMapping]] = None
-    one_of_schemas: Set[str] = { "FunctionOverview", "Name", "ParametersMapping", "SwiftFunction", "VariablesMapping" }
+    oneof_schema_7_validator: Optional[SwiftFunction] = None
+    # data type: StructDefinition
+    oneof_schema_8_validator: Optional[StructDefinition] = None
+    # data type: NotSwift
+    oneof_schema_9_validator: Optional[NotSwift] = None
+    actual_instance: Optional[Union[FunctionOverview, Name, NotSwift, ParameterType, ParametersMapping, ReturnType, StructDefinition, SwiftFunction, VariablesMapping]] = None
+    one_of_schemas: Set[str] = { "FunctionOverview", "Name", "NotSwift", "ParameterType", "ParametersMapping", "ReturnType", "StructDefinition", "SwiftFunction", "VariablesMapping" }
 
     model_config = ConfigDict(
         validate_assignment=True,
@@ -89,17 +101,37 @@ class Inference(BaseModel):
             error_messages.append(f"Error! Input type `{type(v)}` is not `VariablesMapping`")
         else:
             match += 1
+        # validate data type: ParameterType
+        if not isinstance(v, ParameterType):
+            error_messages.append(f"Error! Input type `{type(v)}` is not `ParameterType`")
+        else:
+            match += 1
+        # validate data type: ReturnType
+        if not isinstance(v, ReturnType):
+            error_messages.append(f"Error! Input type `{type(v)}` is not `ReturnType`")
+        else:
+            match += 1
         # validate data type: SwiftFunction
         if not isinstance(v, SwiftFunction):
             error_messages.append(f"Error! Input type `{type(v)}` is not `SwiftFunction`")
         else:
             match += 1
+        # validate data type: StructDefinition
+        if not isinstance(v, StructDefinition):
+            error_messages.append(f"Error! Input type `{type(v)}` is not `StructDefinition`")
+        else:
+            match += 1
+        # validate data type: NotSwift
+        if not isinstance(v, NotSwift):
+            error_messages.append(f"Error! Input type `{type(v)}` is not `NotSwift`")
+        else:
+            match += 1
         if match > 1:
             # more than 1 match
-            raise ValueError("Multiple matches found when setting `actual_instance` in Inference with oneOf schemas: FunctionOverview, Name, ParametersMapping, SwiftFunction, VariablesMapping. Details: " + ", ".join(error_messages))
+            raise ValueError("Multiple matches found when setting `actual_instance` in Inference with oneOf schemas: FunctionOverview, Name, NotSwift, ParameterType, ParametersMapping, ReturnType, StructDefinition, SwiftFunction, VariablesMapping. Details: " + ", ".join(error_messages))
         elif match == 0:
             # no match
-            raise ValueError("No match found when setting `actual_instance` in Inference with oneOf schemas: FunctionOverview, Name, ParametersMapping, SwiftFunction, VariablesMapping. Details: " + ", ".join(error_messages))
+            raise ValueError("No match found when setting `actual_instance` in Inference with oneOf schemas: FunctionOverview, Name, NotSwift, ParameterType, ParametersMapping, ReturnType, StructDefinition, SwiftFunction, VariablesMapping. Details: " + ", ".join(error_messages))
         else:
             return v
 
@@ -138,19 +170,43 @@ class Inference(BaseModel):
             match += 1
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
+        # deserialize data into ParameterType
+        try:
+            instance.actual_instance = ParameterType.from_json(json_str)
+            match += 1
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
+        # deserialize data into ReturnType
+        try:
+            instance.actual_instance = ReturnType.from_json(json_str)
+            match += 1
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
         # deserialize data into SwiftFunction
         try:
             instance.actual_instance = SwiftFunction.from_json(json_str)
             match += 1
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
+        # deserialize data into StructDefinition
+        try:
+            instance.actual_instance = StructDefinition.from_json(json_str)
+            match += 1
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
+        # deserialize data into NotSwift
+        try:
+            instance.actual_instance = NotSwift.from_json(json_str)
+            match += 1
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
 
         if match > 1:
             # more than 1 match
-            raise ValueError("Multiple matches found when deserializing the JSON string into Inference with oneOf schemas: FunctionOverview, Name, ParametersMapping, SwiftFunction, VariablesMapping. Details: " + ", ".join(error_messages))
+            raise ValueError("Multiple matches found when deserializing the JSON string into Inference with oneOf schemas: FunctionOverview, Name, NotSwift, ParameterType, ParametersMapping, ReturnType, StructDefinition, SwiftFunction, VariablesMapping. Details: " + ", ".join(error_messages))
         elif match == 0:
             # no match
-            raise ValueError("No match found when deserializing the JSON string into Inference with oneOf schemas: FunctionOverview, Name, ParametersMapping, SwiftFunction, VariablesMapping. Details: " + ", ".join(error_messages))
+            raise ValueError("No match found when deserializing the JSON string into Inference with oneOf schemas: FunctionOverview, Name, NotSwift, ParameterType, ParametersMapping, ReturnType, StructDefinition, SwiftFunction, VariablesMapping. Details: " + ", ".join(error_messages))
         else:
             return instance
 
@@ -164,7 +220,7 @@ class Inference(BaseModel):
         else:
             return json.dumps(self.actual_instance)
 
-    def to_dict(self) -> Optional[Union[Dict[str, Any], FunctionOverview, Name, ParametersMapping, SwiftFunction, VariablesMapping]]:
+    def to_dict(self) -> Optional[Union[Dict[str, Any], FunctionOverview, Name, NotSwift, ParameterType, ParametersMapping, ReturnType, StructDefinition, SwiftFunction, VariablesMapping]]:
         """Returns the dict representation of the actual instance"""
         if self.actual_instance is None:
             return None

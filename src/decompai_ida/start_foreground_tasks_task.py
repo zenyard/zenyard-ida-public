@@ -36,21 +36,20 @@ class StartForegroundTasksTask(Task):
             self._ctx.model.notify_update()
 
             while len(self._ctx.model.runtime_status.foreground_task_queue) > 0:
-                task_type = self._ctx.model.runtime_status.foreground_task_queue.popleft()
+                task = self._ctx.model.runtime_status.foreground_task_queue.popleft()
                 self._ctx.model.notify_update()
 
                 log = logger.bind(
-                    task=task_type.__name__,
+                    task=type(task).__name__,
                     remaining_tasks=[
-                        remaining_task.__name__
-                        for remaining_task in self._ctx.model.runtime_status.foreground_task_queue
+                        type(remaining).__name__
+                        for remaining in self._ctx.model.runtime_status.foreground_task_queue
                     ],
                 )
 
                 try:
                     log.debug("Starting foreground task")
-                    task_instance = task_type(self._ctx, wait_box)
-                    task_instance.run()
+                    task.run(self._ctx, wait_box)
 
                 except Cancelled:
                     log.info("Foreground tasks cancelled by user")
