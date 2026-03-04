@@ -1,46 +1,53 @@
-# Pre-requisites
+<p align="center">
+  <img src="https://cdn.prod.website-files.com/6852d8be1c1c81e6e1da6378/698c510f30bcf7abaa94c7cb_Logo.svg" alt="Zenyard logo" width="300" />
+</p>
 
-- IDA 9 Pro or newer.
-- Python 3.10 or newer with Pip. Use `idapyswitch` (in your IDA installation
-  folder) to configure which Python environment is used by IDA. Note that IDA
-  versions are incompatible with later Python releases.
-- Git (for installation).
+<p align="center">
+  <a href="https://zenyard.ai">zenyard.ai</a>
+  &nbsp;&nbsp;&middot;&nbsp;&nbsp;
+  <a href="https://zenyard.notion.site/Setting-up-Zenyard-in-IDA-Pro-309e2d30327680caa419d779a0c09ddb">Setup Guide</a>
+</p>
 
-# Quick installation and upgrade from IDA
+# Zenyard for IDA Pro
 
-Switch IDA console from **IDC** to **Python**, and run the following:
+**In-depth binary understanding with a purpose-built AI agent that helps you get straight to the meaningful parts and understand them faster.**
 
-```python
-try:
-  from pip._vendor import truststore; truststore.inject_into_ssl()
-except: pass
-GIT_TOKEN="<GIT_TOKEN>"; import urllib.request; import base64; req = urllib.request.Request("https://raw.githubusercontent.com/zenyard/decompai-ida-public/main/install_from_ida.py"); req.add_header("Authorization", f"Basic {base64.b64encode(GIT_TOKEN.encode('utf-8')).decode('utf-8')}"); exec(urllib.request.urlopen(req).read())
-```
+Zenyard brings AI-powered reverse engineering directly into your workflow. It automatically analyzes binaries, renames functions and variables with meaningful identifiers, infers types and structures, and provides an interactive AI copilot that understands your binary at a deep level.
 
-This will run a script performing the steps in next section.
+This repository serves as the official distribution hub for the Zenyard client for IDA Pro.
 
-# Manual installation
+## 📥 Download & Installation
 
-**Note:** by following these steps, you accept [Zenyard Terms of Service](https://www.zenyard.ai/eula).
+Type the following command into the Python window in IDA Pro: {command}
 
-- Install package in same Python environment used by IDA:
+For system requirements and a short setup guide, please refer to:
+* **[IDA Pro Setup & Installation Guide](https://zenyard.notion.site/Setting-up-Zenyard-in-IDA-Pro-309e2d30327680caa419d779a0c09ddb)**
 
-  ```sh
-  pip3 install --upgrade \
-    $IDAUSR/plugins/decompai_packages \
-    git+https://github.com/zenyard/decompai-ida-public.git
-  ```
+## 📖 Documentation & Usage
 
-  Use `idapyswitch` to verify or change the Python environment used by IDA.
+To ensure our guides are always up-to-date, we maintain all of our documentation, workflows, and feature breakdowns in our official user guides:
+* **[The 5-Minute Quick Start Guide](https://zenyard.notion.site/Welcome-to-Zenyard-316e2d30327680edb1aff7092ddd3230)**
 
-  **Note** - the above will install all packages to a folder. You may choose to
-  install package globally, to the user (with `--user`) or to a virtualenv if
-  your setup is properly configured for these options.
+## ✉️ Contact & Support
 
-- Add `decompai_stub.py` to [`$IDAUSR/plugins/`][1] folder (you may need to
-  create this folder).
+Please reach out to us directly via email so we can assist you promptly:
 
-- Add the `decompai.json` to [`$IDAUSR/`][1] folder, and replace `<API KEY>`
-  with your API key.
+* **Technical Support & Bug Reports:** [support@zenyard.ai](mailto:support@zenyard.ai)
+  *(Please include your IDA Pro version, OS, Java version, extension version, application logs, and **screenshots of the issue**).*
+* **Full Version Access & On-Prem Deployment:** [access@zenyard.ai](mailto:access@zenyard.ai)
+* **General Inquiries:** [contact@zenyard.ai](mailto:contact@zenyard.ai)
 
-[1]: https://hex-rays.com/blog/igors-tip-of-the-week-33-idas-user-directory-idausr
+## 💳 Usage Plans
+
+Zenyard offers both free and paid plans. Your current usage is always visible in the status bar. When a plan limit is reached, analysis pauses automatically — the Copilot and previously applied results remain available. Click the usage indicator for plan details or to upgrade.
+
+Binary size limits may apply depending on your plan. If a binary exceeds your plan's limit, a prompt will guide you to the appropriate plan.
+
+## ⚖️ License
+
+This project is licensed under the **GNU Affero General Public License v3.0 only**.
+
+See the [LICENSE](LICENSE) file in this repository for the full license text.
+
+---
+*Note: This repository does not contain the proprietary Zenyard backend or AI models, only the client-side extension required to interface with the Zenyard service.*
