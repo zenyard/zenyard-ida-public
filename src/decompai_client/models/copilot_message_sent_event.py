@@ -17,19 +17,31 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, StrictStr
-from typing import Any, ClassVar, Dict, List
+from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr, field_validator
+from typing import Any, ClassVar, Dict, List, Optional
 from typing import Optional, Set
 from typing_extensions import Self
 
-class CopilotAdditionalParams(BaseModel):
+class CopilotMessageSentEvent(BaseModel):
     """
-    CopilotAdditionalParams
+    Fired when a user sends a message to the copilot.
     """ # noqa: E501
-    region_name: StrictStr
-    aws_access_key_id: StrictStr
-    aws_secret_access_key: StrictStr
-    __properties: ClassVar[List[str]] = ["region_name", "aws_access_key_id", "aws_secret_access_key"]
+    event_type: Optional[StrictStr] = 'Copilot - Send'
+    timestamp: StrictInt
+    input_length_chars: StrictInt
+    thread_id: StrictStr
+    message_index: StrictInt
+    __properties: ClassVar[List[str]] = ["event_type", "timestamp", "input_length_chars", "thread_id", "message_index"]
+
+    @field_validator('event_type')
+    def event_type_validate_enum(cls, value):
+        """Validates the enum"""
+        if value is None:
+            return value
+
+        if value not in set(['Copilot - Send']):
+            raise ValueError("must be one of enum values ('Copilot - Send')")
+        return value
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -49,7 +61,7 @@ class CopilotAdditionalParams(BaseModel):
 
     @classmethod
     def from_json(cls, json_str: str) -> Optional[Self]:
-        """Create an instance of CopilotAdditionalParams from a JSON string"""
+        """Create an instance of CopilotMessageSentEvent from a JSON string"""
         return cls.from_dict(json.loads(json_str))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -74,7 +86,7 @@ class CopilotAdditionalParams(BaseModel):
 
     @classmethod
     def from_dict(cls, obj: Optional[Dict[str, Any]]) -> Optional[Self]:
-        """Create an instance of CopilotAdditionalParams from a dict"""
+        """Create an instance of CopilotMessageSentEvent from a dict"""
         if obj is None:
             return None
 
@@ -82,9 +94,11 @@ class CopilotAdditionalParams(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "region_name": obj.get("region_name"),
-            "aws_access_key_id": obj.get("aws_access_key_id"),
-            "aws_secret_access_key": obj.get("aws_secret_access_key")
+            "event_type": obj.get("event_type") if obj.get("event_type") is not None else 'Copilot - Send',
+            "timestamp": obj.get("timestamp"),
+            "input_length_chars": obj.get("input_length_chars"),
+            "thread_id": obj.get("thread_id"),
+            "message_index": obj.get("message_index")
         })
         return _obj
 

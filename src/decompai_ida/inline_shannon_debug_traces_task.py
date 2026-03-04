@@ -198,9 +198,8 @@ def _compute(expr: _Expr) -> ty.Optional[int]:
         case _Address(address):
             return ida_bytes.get_dword(address)
 
-        case (
-            _Add(_Address() as address, _Number(offset))
-            | _Add(_Number(offset), _Address() as address)
+        case _Add(_Address() as address, _Number(offset)) | _Add(
+            _Number(offset), _Address() as address
         ):
             # This assumes offsetting only done on `dbg_trace*`.
             address = _compute(address)

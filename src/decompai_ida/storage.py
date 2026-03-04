@@ -53,9 +53,83 @@ class SingleValue(ty.Generic[_T]):
         return await ida_tasks.run(self.clear_sync)
 
 
+class StrMap(ty.Generic[_T]):
+    """
+    Stores values keyed by strings, with individual key access.
+
+    Uses IDA's netnode hash array to map string keys to integer storage slots,
+    and a _Storage for the actual values (supporting large values via blob
+    scaling, same as AddressMap).
+
+    Slot 0 is reserved as the "not found" sentinel for hashval_long, so the
+    counter starts at 1.
+    """
+
+    _COUNTER_INIT = 1
+
+    def __init__(self, name: str, type_: type[_T]):
+        full_name = _NAME_PREFIX + name
+        self._node = ida_netnode.netnode(full_name, 0, True)
+        self._counter = SingleValue(
+            f"{name}.counter", int, default=self._COUNTER_INIT
+        )
+        self._storage = _Storage(f"{name}.storage", type_, scale=0x10000)
+
+    def keys_sync(self) -> set[str]:
+        keys = set[str]()
+        key = self._node.hashfirst(ida_netnode.htag)
+        while isinstance(key, str):
+            keys.add(key)
+            key = self._node.hashnext(key, ida_netnode.htag)
+        return keys
+
+    async def keys(self) -> set[str]:
+        return await ida_tasks.run(self.keys_sync)
+
+    def get_sync(self, key: str) -> ty.Optional[_T]:
+        idx = self._node.hashval_long(key, ida_netnode.htag)
+        if idx == 0:
+            return None
+        return self._storage.get(idx)
+
+    async def get(self, key: str) -> ty.Optional[_T]:
+        return await ida_tasks.run(self.get_sync, key)
+
+    def set_sync(self, key: str, value: ty.Optional[_T]) -> None:
+        if value is None:
+            idx = self._node.hashval_long(key, ida_netnode.htag)
+            if idx != 0:
+                self._node.hashdel(key, ida_netnode.htag)
+                self._storage.set(idx, None)
+        else:
+            idx = self._node.hashval_long(key, ida_netnode.htag)
+            if idx == 0:
+                idx = self._counter.get_sync()
+                self._counter.set_sync(idx + 1)
+                self._node.hashset_idx(key, idx, ida_netnode.htag)
+            self._storage.set(idx, value)
+
+    async def set(self, key: str, value: ty.Optional[_T]) -> None:
+        return await ida_tasks.run(self.set_sync, key, value)
+
+    def clear_sync(self) -> None:
+        self._node.hashdel_all(ida_netnode.htag)
+        self._counter.set_sync(self._COUNTER_INIT)
+        self._storage.clear()
+
+    async def clear(self) -> None:
+        return await ida_tasks.run(self.clear_sync)
+
+
 class AddressMap(ty.Generic[_T]):
     def __init__(self, name: str, type_: type[_T]):
         self._storage = _Storage(name, type_, scale=1)
+
+    def keys_sync(self) -> set[int]:
+        return self._storage.keys()
+
+    async def keys(self) -> set[int]:
+        return await ida_tasks.run(self.keys_sync)
 
     def get_sync(self, address: int) -> ty.Optional[_T]:
         return self._storage.get(address)
@@ -288,6 +362,16 @@ class _Storage(ty.Generic[_T]):
         self._node = ida_netnode.netnode(self._full_name, 0, True)
         self._type_adapter = pydantic.TypeAdapter(type_)
         self._scale = scale
+
+    def keys(self) -> set[int]:
+        result = set[int]()
+        skip = _ARRAYS * self._scale - 1
+        for array in range(_ARRAYS):
+            idx = self._node.altfirst(array)
+            while idx != ida_netnode.BADNODE:
+                result.add(idx // self._scale)
+                idx = self._node.altnext(idx + skip, array)
+        return result
 
     def clear(self) -> None:
         self._node.kill()

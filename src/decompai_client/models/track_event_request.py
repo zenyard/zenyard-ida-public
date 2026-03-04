@@ -17,18 +17,20 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr
-from typing import Any, ClassVar, Dict, List, Optional
+from pydantic import BaseModel, ConfigDict
+from typing import Any, ClassVar, Dict, List
+from decompai_client.models.event import Event
+from decompai_client.models.extra_details import ExtraDetails
 from typing import Optional, Set
 from typing_extensions import Self
 
-class FinishAndAnalyzeCurrentRevisionParams(BaseModel):
+class TrackEventRequest(BaseModel):
     """
-    FinishAndAnalyzeCurrentRevisionParams
+    TrackEventRequest
     """ # noqa: E501
-    analyze_dependents: StrictBool
-    allowed_sub_analysis_types: Optional[List[StrictStr]] = None
-    __properties: ClassVar[List[str]] = ["analyze_dependents", "allowed_sub_analysis_types"]
+    event: Event
+    environment: ExtraDetails
+    __properties: ClassVar[List[str]] = ["event", "environment"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -48,7 +50,7 @@ class FinishAndAnalyzeCurrentRevisionParams(BaseModel):
 
     @classmethod
     def from_json(cls, json_str: str) -> Optional[Self]:
-        """Create an instance of FinishAndAnalyzeCurrentRevisionParams from a JSON string"""
+        """Create an instance of TrackEventRequest from a JSON string"""
         return cls.from_dict(json.loads(json_str))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -69,16 +71,17 @@ class FinishAndAnalyzeCurrentRevisionParams(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
-        # set to None if allowed_sub_analysis_types (nullable) is None
-        # and model_fields_set contains the field
-        if self.allowed_sub_analysis_types is None and "allowed_sub_analysis_types" in self.model_fields_set:
-            _dict['allowed_sub_analysis_types'] = None
-
+        # override the default output from pydantic by calling `to_dict()` of event
+        if self.event:
+            _dict['event'] = self.event.to_dict()
+        # override the default output from pydantic by calling `to_dict()` of environment
+        if self.environment:
+            _dict['environment'] = self.environment.to_dict()
         return _dict
 
     @classmethod
     def from_dict(cls, obj: Optional[Dict[str, Any]]) -> Optional[Self]:
-        """Create an instance of FinishAndAnalyzeCurrentRevisionParams from a dict"""
+        """Create an instance of TrackEventRequest from a dict"""
         if obj is None:
             return None
 
@@ -86,8 +89,8 @@ class FinishAndAnalyzeCurrentRevisionParams(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "analyze_dependents": obj.get("analyze_dependents"),
-            "allowed_sub_analysis_types": obj.get("allowed_sub_analysis_types")
+            "event": Event.from_dict(obj["event"]) if obj.get("event") is not None else None,
+            "environment": ExtraDetails.from_dict(obj["environment"]) if obj.get("environment") is not None else None
         })
         return _obj
 

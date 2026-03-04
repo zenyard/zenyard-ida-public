@@ -17,20 +17,27 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, StrictStr
+from pydantic import BaseModel, ConfigDict, StrictStr, field_validator
 from typing import Any, ClassVar, Dict, List, Optional
-from decompai_client.models.budget import Budget
 from typing import Optional, Set
 from typing_extensions import Self
 
-class PlanConfig(BaseModel):
+class BinaryStatePaused(BaseModel):
     """
-    Simplified plan configuration for user creation.
+    Binary paused and will not start new analysis
     """ # noqa: E501
-    name: StrictStr
-    budget: Optional[Budget] = None
-    expiration: Optional[StrictStr] = None
-    __properties: ClassVar[List[str]] = ["name", "budget", "expiration"]
+    state: Optional[StrictStr] = 'paused'
+    __properties: ClassVar[List[str]] = ["state"]
+
+    @field_validator('state')
+    def state_validate_enum(cls, value):
+        """Validates the enum"""
+        if value is None:
+            return value
+
+        if value not in set(['paused']):
+            raise ValueError("must be one of enum values ('paused')")
+        return value
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -50,7 +57,7 @@ class PlanConfig(BaseModel):
 
     @classmethod
     def from_json(cls, json_str: str) -> Optional[Self]:
-        """Create an instance of PlanConfig from a JSON string"""
+        """Create an instance of BinaryStatePaused from a JSON string"""
         return cls.from_dict(json.loads(json_str))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -71,24 +78,11 @@ class PlanConfig(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
-        # override the default output from pydantic by calling `to_dict()` of budget
-        if self.budget:
-            _dict['budget'] = self.budget.to_dict()
-        # set to None if budget (nullable) is None
-        # and model_fields_set contains the field
-        if self.budget is None and "budget" in self.model_fields_set:
-            _dict['budget'] = None
-
-        # set to None if expiration (nullable) is None
-        # and model_fields_set contains the field
-        if self.expiration is None and "expiration" in self.model_fields_set:
-            _dict['expiration'] = None
-
         return _dict
 
     @classmethod
     def from_dict(cls, obj: Optional[Dict[str, Any]]) -> Optional[Self]:
-        """Create an instance of PlanConfig from a dict"""
+        """Create an instance of BinaryStatePaused from a dict"""
         if obj is None:
             return None
 
@@ -96,9 +90,7 @@ class PlanConfig(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "name": obj.get("name"),
-            "budget": Budget.from_dict(obj["budget"]) if obj.get("budget") is not None else None,
-            "expiration": obj.get("expiration")
+            "state": obj.get("state") if obj.get("state") is not None else 'paused'
         })
         return _obj
 

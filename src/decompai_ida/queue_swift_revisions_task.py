@@ -15,7 +15,7 @@ class QueueSwiftRevisionsTask(BaseQueueRevisionsTask):
     def __init__(self, addresses: ty.Iterable[int]):
         self._addresses = set(addresses)
 
-    def merge_from(self, other: tye.Self) -> None:
+    def merge_from(self, other: tye.Self) -> None:  # type: ignore
         self._addresses |= other._addresses
 
     def _get_symbols_to_queue(self) -> ty.Iterable[Symbol]:
@@ -23,7 +23,9 @@ class QueueSwiftRevisionsTask(BaseQueueRevisionsTask):
             Symbol(address=addr, type="function") for addr in self._addresses
         ]
 
-    def _create_revision(self, objects: tuple[Object, ...]) -> Revision:
+    def _create_revision(
+        self, objects: tuple[Object, ...], *, is_last: bool
+    ) -> Revision:
         return Revision(
             objects=objects, is_initial_analysis=True, swift_only=True
         )

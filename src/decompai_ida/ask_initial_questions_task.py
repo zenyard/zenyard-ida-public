@@ -89,9 +89,12 @@ class AskInitialQuestions(Task):
     """
 
     async def _run(self):
+        is_paused = await self._ctx.model.wait_for_paused_state()
+        if is_paused:
+            return
+
         already_asked = await self._ctx.model.asked_initial_questions.get()
         already_uploaded = await self._ctx.model.initial_upload_complete.get()
-
         if already_asked or already_uploaded:
             await logger.get().adebug(
                 "Skipping initial questions",

@@ -17,20 +17,28 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool
+from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr, field_validator
 from typing import Any, ClassVar, Dict, List, Optional
-from typing_extensions import Annotated
 from typing import Optional, Set
 from typing_extensions import Self
 
-class UserConfigRequest(BaseModel):
+class CopilotClearRequestedEvent(BaseModel):
     """
-    Optional configuration overrides for new user.
+    Fired when the user clears the copilot conversation.
     """ # noqa: E501
-    max_binary_size_mb: Optional[Annotated[int, Field(le=120, strict=True, ge=1)]] = 5
-    copilot_enabled: Optional[StrictBool] = False
-    swiftglow_enabled: Optional[StrictBool] = False
-    __properties: ClassVar[List[str]] = ["max_binary_size_mb", "copilot_enabled", "swiftglow_enabled"]
+    event_type: Optional[StrictStr] = 'Copilot - Clear Thread'
+    timestamp: StrictInt
+    __properties: ClassVar[List[str]] = ["event_type", "timestamp"]
+
+    @field_validator('event_type')
+    def event_type_validate_enum(cls, value):
+        """Validates the enum"""
+        if value is None:
+            return value
+
+        if value not in set(['Copilot - Clear Thread']):
+            raise ValueError("must be one of enum values ('Copilot - Clear Thread')")
+        return value
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -50,7 +58,7 @@ class UserConfigRequest(BaseModel):
 
     @classmethod
     def from_json(cls, json_str: str) -> Optional[Self]:
-        """Create an instance of UserConfigRequest from a JSON string"""
+        """Create an instance of CopilotClearRequestedEvent from a JSON string"""
         return cls.from_dict(json.loads(json_str))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -75,7 +83,7 @@ class UserConfigRequest(BaseModel):
 
     @classmethod
     def from_dict(cls, obj: Optional[Dict[str, Any]]) -> Optional[Self]:
-        """Create an instance of UserConfigRequest from a dict"""
+        """Create an instance of CopilotClearRequestedEvent from a dict"""
         if obj is None:
             return None
 
@@ -83,9 +91,8 @@ class UserConfigRequest(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "max_binary_size_mb": obj.get("max_binary_size_mb") if obj.get("max_binary_size_mb") is not None else 5,
-            "copilot_enabled": obj.get("copilot_enabled") if obj.get("copilot_enabled") is not None else False,
-            "swiftglow_enabled": obj.get("swiftglow_enabled") if obj.get("swiftglow_enabled") is not None else False
+            "event_type": obj.get("event_type") if obj.get("event_type") is not None else 'Copilot - Clear Thread',
+            "timestamp": obj.get("timestamp")
         })
         return _obj
 

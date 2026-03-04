@@ -29,6 +29,13 @@ _SymbolName: ty.TypeAlias = ty.Annotated[
 
 
 @dataclass(frozen=True)
+class CopilotTools:
+    common: list[ty.Any]
+    exploration: list[ty.Any]
+    modification: list[ty.Any]
+
+
+@dataclass(frozen=True)
 class Function:
     name: str
     address: Address
@@ -566,19 +573,25 @@ async def get_copilot_tools(model: Model):
             search_function_comments_sync, model, regex, cursor
         )
 
-    copilot_tools = [
+    common_tools = [
         get_current_function,
+        decompile_function,
+    ]
+
+    exploration_tools: list[ty.Any] = [
         get_symbol_address_by_name,
         list_functions,
-        decompile_function,
-        rename_function_local_variables,
-        rename_symbols,
         list_calling_functions,
         get_function_comment,
-        set_function_comments,
-        set_function_prototypes,
         get_local_types,
         search_function_comments,
+    ]
+
+    modification_tools = [
+        rename_function_local_variables,
+        rename_symbols,
+        set_function_comments,
+        set_function_prototypes,
     ]
 
     # Only register Swift tools if this is a Swift binary
@@ -610,6 +623,10 @@ async def get_copilot_tools(model: Model):
                 search_swift_functions_sync, model, regex, cursor
             )
 
-        copilot_tools += [get_swift_source, search_swift_functions]
+        exploration_tools += [get_swift_source, search_swift_functions]
 
-    return copilot_tools
+    return CopilotTools(
+        common=common_tools,
+        exploration=exploration_tools,
+        modification=modification_tools,
+    )

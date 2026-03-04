@@ -31,7 +31,8 @@ class BinaryDetails(BaseModel):
     original_languages: Optional[OriginalLanguages] = None
     platform: Optional[StrictStr] = None
     os_version: Optional[StrictStr] = None
-    __properties: ClassVar[List[str]] = ["instructions", "original_languages", "platform", "os_version"]
+    input_file_sha256: Optional[StrictStr] = None
+    __properties: ClassVar[List[str]] = ["instructions", "original_languages", "platform", "os_version", "input_file_sha256"]
 
     @field_validator('platform')
     def platform_validate_enum(cls, value):
@@ -100,6 +101,11 @@ class BinaryDetails(BaseModel):
         if self.os_version is None and "os_version" in self.model_fields_set:
             _dict['os_version'] = None
 
+        # set to None if input_file_sha256 (nullable) is None
+        # and model_fields_set contains the field
+        if self.input_file_sha256 is None and "input_file_sha256" in self.model_fields_set:
+            _dict['input_file_sha256'] = None
+
         return _dict
 
     @classmethod
@@ -115,7 +121,8 @@ class BinaryDetails(BaseModel):
             "instructions": obj.get("instructions"),
             "original_languages": OriginalLanguages.from_dict(obj["original_languages"]) if obj.get("original_languages") is not None else None,
             "platform": obj.get("platform"),
-            "os_version": obj.get("os_version")
+            "os_version": obj.get("os_version"),
+            "input_file_sha256": obj.get("input_file_sha256")
         })
         return _obj
 

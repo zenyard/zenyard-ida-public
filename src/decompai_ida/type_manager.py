@@ -1,0 +1,715 @@
+"""
+Type manager for tracking and managing struct types in IDA's type library.
+
+This module ensures that only struct types actually used by parameter/return value
+inferences (directly or indirectly through nested structs) are registered in IDA's
+type library.
+"""
+
+import re
+import typing as ty
+
+import ida_typeinf
+
+from decompai_client import StructDefinition
+from decompai_ida import logger
+from decompai_ida.struct_generator import (
+    generate_struct_declaration_with_renames,
+)
+from decompai_ida.lvars import (
+    apply_parameter_type_sync,
+    apply_return_type_sync,
+)
+
+if ty.TYPE_CHECKING:
+    from decompai_ida.model import Model
+
+# Key used in function_struct_usage dict for return type
+_RETURN_KEY = "return"
+
+# Pattern for substituting struct names in type strings (word boundary matching)
+_STRUCT_NAME_PATTERN = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\b")
+
+
+def _compute_effective_names(
+    required_struct_ids: set[str],
+    definitions: dict[str, StructDefinition],
+) -> dict[str, str]:
+    """
+    Compute effective names for structs, adding suffix for collisions.
+
+    When multiple required structs have the same name, each gets a suffix
+    from its struct_id to make the name unique.
+
+    Returns: mapping of struct_id -> effective_name
+    """
+    # Group struct_ids by their original name
+    name_to_ids = dict[str, list[str]]()
+    for struct_id in required_struct_ids:
+        struct_def = definitions.get(struct_id)
+        if struct_def:
+            name_to_ids.setdefault(struct_def.name, []).append(struct_id)
+
+    # Compute effective names
+    effective_names = dict[str, str]()
+    for name, ids in name_to_ids.items():
+        if len(ids) == 1:
+            # No collision
+            effective_names[ids[0]] = name
+        else:
+            # Collision - add suffix from struct_id
+            for struct_id in ids:
+                effective_names[struct_id] = f"{name}_{struct_id[:8]}"
+
+    return effective_names
+
+
+def _substitute_struct_names(
+    type_str: str,
+    name_substitutions: dict[str, str],
+) -> str:
+    """
+    Substitute struct names in a C type string.
+
+    Uses word boundary matching to avoid partial replacements.
+
+    Example: "Config*" -> "Config_abc123*" if Config was renamed
+    """
+    if not name_substitutions:
+        return type_str
+
+    def replace_match(match: re.Match[str]) -> str:
+        name = match.group(1)
+        return name_substitutions.get(name, name)
+
+    return _STRUCT_NAME_PATTERN.sub(replace_match, type_str)
+
+
+def register_struct_definition_sync(
+    struct_def: StructDefinition, *, model: "Model"
+) -> None:
+    """
+    Store struct definition and compute its dependencies.
+
+    Does NOT immediately add to IDA's type library - reconcile_type_library_sync
+    handles that.
+    """
+    # Store the definition
+    model.struct_definitions.set_sync(struct_def.id, struct_def)
+
+    # Compute and store dependencies from field types
+    dep_ids = [
+        field.struct_id
+        for field in struct_def.field_definitions
+        if field.struct_id is not None
+    ]
+    model.struct_dependencies.set_sync(struct_def.id, dep_ids)
+
+    logger.debug(
+        "Registered struct definition",
+        struct_id=struct_def.id,
+        struct_name=struct_def.name,
+    )
+
+
+def set_parameter_struct_sync(
+    address: int,
+    parameter_index: int,
+    struct_id: ty.Optional[str],
+    *,
+    model: "Model",
+) -> None:
+    """
+    Set the struct_id used by a parameter at the given address.
+
+    Pass struct_id=None to clear the struct usage for this parameter.
+    """
+    usage = model.function_struct_usage.get_sync(address) or {}
+    key = str(parameter_index)
+
+    if struct_id is not None:
+        usage[key] = struct_id
+    elif key in usage:
+        del usage[key]
+
+    _update_struct_usage(address, usage, model=model)
+
+
+def set_return_struct_sync(
+    address: int,
+    struct_id: ty.Optional[str],
+    *,
+    model: "Model",
+) -> None:
+    """
+    Set the struct_id used by the return type at the given address.
+
+    Pass struct_id=None to clear the struct usage for this return type.
+    """
+    usage = model.function_struct_usage.get_sync(address) or {}
+
+    if struct_id is not None:
+        usage[_RETURN_KEY] = struct_id
+    elif _RETURN_KEY in usage:
+        del usage[_RETURN_KEY]
+
+    _update_struct_usage(address, usage, model=model)
+
+
+def _update_struct_usage(
+    address: int, usage: dict[str, str], *, model: "Model"
+) -> None:
+    model.function_struct_usage.set_sync(address, usage if usage else None)
+
+
+def _collect_directly_used_structs_sync(*, model: "Model") -> set[str]:
+    """
+    Collect all struct_ids directly referenced by parameter/return types.
+
+    Iterates over all function_struct_usage entries to find directly used structs.
+    """
+    used = set[str]()
+
+    for address in model.function_struct_usage.keys_sync():
+        usage = model.function_struct_usage.get_sync(address)
+        if usage:
+            for struct_id in usage.values():
+                used.add(struct_id)
+
+    return used
+
+
+def compute_required_structs_sync(*, model: "Model") -> set[str]:
+    """
+    Return all struct_ids that should exist in IDA's type library.
+
+    Computes transitive closure of directly used structs plus their dependencies.
+    """
+    required = set[str]()
+    directly_used = _collect_directly_used_structs_sync(model=model)
+    to_visit = set(directly_used)
+
+    while to_visit:
+        struct_id = to_visit.pop()
+        if struct_id in required:
+            continue
+        required.add(struct_id)
+
+        # Add dependencies (nested structs)
+        for dep_id in model.struct_dependencies.get_sync(struct_id) or []:
+            if dep_id not in required:
+                to_visit.add(dep_id)
+
+    return required
+
+
+def _topological_sort(
+    struct_ids: set[str], dependencies: dict[str, list[str]]
+) -> list[str]:
+    """
+    Sort structs so dependencies come before dependents.
+
+    Handles cycles by breaking them (cycles shouldn't happen with proper struct
+    definitions, but we handle them gracefully).
+    """
+    result = list[str]()
+    visiting = set[str]()
+    visited = set[str]()
+
+    def visit(struct_id: str) -> None:
+        if struct_id in visited:
+            return
+        if struct_id in visiting:
+            # Cycle detected - skip to break cycle
+            return
+
+        visiting.add(struct_id)
+
+        # Visit dependencies first
+        deps = dependencies.get(struct_id, [])
+        for dep_id in deps:
+            if dep_id in struct_ids:
+                visit(dep_id)
+
+        visiting.discard(struct_id)
+        visited.add(struct_id)
+        result.append(struct_id)
+
+    for struct_id in struct_ids:
+        visit(struct_id)
+
+    return result
+
+
+def _add_struct_to_ida_sync(
+    struct_id: str,
+    effective_names: dict[str, str],
+    definitions: dict[str, StructDefinition],
+    *,
+    model: "Model",
+) -> bool:
+    """
+    Add a struct to IDA's type library.
+
+    Args:
+        struct_id: The ID of the struct to add
+        effective_names: Mapping of struct_id -> effective_name for resolving
+            field type substitutions and determining this struct's name in IDA
+        definitions: Mapping of struct_id -> StructDefinition for looking up
+            struct definitions and original names
+
+    Returns True if successful, False otherwise.
+    """
+    struct_def = definitions.get(struct_id)
+    effective_name = effective_names.get(struct_id)
+
+    if struct_def is None or effective_name is None:
+        logger.warning(
+            "Cannot add struct to IDA - definition or effective name not found",
+            struct_id=struct_id,
+        )
+        return False
+
+    try:
+        struct_decl = generate_struct_declaration_with_renames(
+            struct_def, effective_name, effective_names, definitions
+        )
+        new_tinfo = ida_typeinf.tinfo_t()
+        if (
+            ida_typeinf.parse_decl(
+                new_tinfo,
+                ida_typeinf.get_idati(),  # type: ignore
+                struct_decl,
+                ida_typeinf.PT_SIL,
+            )
+            is None
+        ):
+            logger.warning(
+                "Failed to parse struct declaration",
+                struct_id=struct_id,
+                struct_name=struct_def.name,
+                effective_name=effective_name,
+            )
+            return False
+
+        new_tinfo.set_named_type(None, effective_name)  # type: ignore
+
+        # Track what effective_name was used for this struct
+        model.registered_struct_names.set_sync(struct_id, effective_name)
+
+        logger.debug(
+            "Added struct to IDA type library",
+            struct_id=struct_id,
+            struct_name=struct_def.name,
+            effective_name=effective_name,
+        )
+        return True
+
+    except Exception as ex:
+        logger.warning(
+            "Error adding struct to IDA",
+            struct_id=struct_id,
+            exc_info=ex,
+        )
+        return False
+
+
+def _remove_struct_from_ida_sync(
+    struct_id: str,
+    effective_name: str,
+    *,
+    model: "Model",
+) -> bool:
+    """
+    Remove a struct from IDA's type library.
+
+    Args:
+        struct_id: The ID of the struct to remove
+        effective_name: The name the struct was registered under in IDA
+
+    Returns True if successful, False otherwise.
+    """
+    # Remove from registered_struct_names regardless of whether delete succeeds
+    model.registered_struct_names.set_sync(struct_id, None)
+
+    try:
+        til = ida_typeinf.get_idati()
+        ordinal = ida_typeinf.get_type_ordinal(til, effective_name)
+
+        if ordinal != 0:
+            ida_typeinf.del_numbered_type(til, ordinal)
+            logger.debug(
+                "Removed struct from IDA type library",
+                struct_id=struct_id,
+                effective_name=effective_name,
+            )
+
+        return True
+
+    except Exception as ex:
+        logger.warning(
+            "Error removing struct from IDA",
+            struct_id=struct_id,
+            effective_name=effective_name,
+            exc_info=ex,
+        )
+        return False
+
+
+def _reregister_struct_in_ida_sync(
+    struct_id: str,
+    old_effective_name: str,
+    effective_names: dict[str, str],
+    definitions: dict[str, StructDefinition],
+    *,
+    model: "Model",
+) -> bool:
+    """
+    Re-register a struct in IDA's type library with a new name.
+
+    Updates the struct in place using its original ordinal rather than
+    removing and re-adding it.
+
+    Args:
+        struct_id: The ID of the struct to re-register
+        old_effective_name: The name the struct was previously registered under
+        effective_names: Mapping of struct_id -> effective_name for resolving
+            field type substitutions and determining this struct's new name
+        definitions: Mapping of struct_id -> StructDefinition for looking up
+            struct definitions and original names
+
+    Returns True if successful, False otherwise.
+    """
+    struct_def = definitions.get(struct_id)
+    new_effective_name = effective_names.get(struct_id)
+
+    if struct_def is None or new_effective_name is None:
+        logger.warning(
+            "Cannot re-register struct - definition or effective name not found",
+            struct_id=struct_id,
+        )
+        return False
+
+    try:
+        til = ida_typeinf.get_idati()
+        original_ordinal = ida_typeinf.get_type_ordinal(til, old_effective_name)
+
+        if original_ordinal == 0:
+            logger.warning(
+                "Cannot re-register struct - not found in type library",
+                struct_id=struct_id,
+                old_effective_name=old_effective_name,
+            )
+            return False
+
+        struct_decl = generate_struct_declaration_with_renames(
+            struct_def, new_effective_name, effective_names, definitions
+        )
+        new_tinfo = ida_typeinf.tinfo_t()
+        if (
+            ida_typeinf.parse_decl(
+                new_tinfo,
+                til,  # type: ignore
+                struct_decl,
+                ida_typeinf.PT_SIL,
+            )
+            is None
+        ):
+            logger.warning(
+                "Failed to parse struct declaration for re-registration",
+                struct_id=struct_id,
+                struct_name=struct_def.name,
+                new_effective_name=new_effective_name,
+            )
+            return False
+
+        # Update in place using the original ordinal
+        new_tinfo.set_numbered_type(
+            None,  # type: ignore
+            original_ordinal,
+            ida_typeinf.NTF_REPLACE,
+            new_effective_name,
+        )
+
+        # Update tracked effective name
+        model.registered_struct_names.set_sync(struct_id, new_effective_name)
+
+        logger.debug(
+            "Re-registered struct in IDA type library",
+            struct_id=struct_id,
+            struct_name=struct_def.name,
+            old_effective_name=old_effective_name,
+            new_effective_name=new_effective_name,
+        )
+        return True
+
+    except Exception as ex:
+        logger.warning(
+            "Error re-registering struct in IDA",
+            struct_id=struct_id,
+            exc_info=ex,
+        )
+        return False
+
+
+def set_original_type_annotation_sync(
+    address: int,
+    key: str,
+    original_annotation: str,
+    *,
+    model: "Model",
+) -> None:
+    """
+    Store original type annotation for applying/re-applying.
+
+    Args:
+        address: Function address
+        key: Parameter index string ("0", "1", etc.) or "return"
+        original_annotation: The original type annotation string
+        model: The model
+    """
+    annotations = (
+        model.function_original_type_annotations.get_sync(address) or {}
+    )
+    annotations[key] = original_annotation
+    model.function_original_type_annotations.set_sync(address, annotations)
+
+
+def get_functions_using_struct_sync(
+    struct_id: str,
+    *,
+    model: "Model",
+) -> list[tuple[int, str]]:
+    """
+    Get all (address, key) pairs where the function uses the given struct.
+
+    Returns a list of (address, key) tuples where key is a parameter index
+    string or "return".
+    """
+    result = list[tuple[int, str]]()
+    for address in model.function_struct_usage.keys_sync():
+        usage = model.function_struct_usage.get_sync(address)
+        if usage:
+            for key, sid in usage.items():
+                if sid == struct_id:
+                    result.append((address, key))
+    return result
+
+
+def apply_types_for_struct_sync(
+    struct_id: str,
+    *,
+    model: "Model",
+) -> None:
+    """
+    Apply all types referencing the struct (for new or renamed structs).
+
+    Called when a struct is newly registered or when its effective name changes
+    due to collision resolution. Finds all functions using this struct via
+    function_struct_usage and applies the stored original type annotations
+    with the correct effective name.
+
+    Args:
+        struct_id: The struct_id as stored in function_struct_usage.
+    """
+    struct_def = model.struct_definitions.get_sync(struct_id)
+    if not struct_def:
+        return
+
+    effective_name = model.registered_struct_names.get_sync(struct_id)
+    if not effective_name:
+        return
+
+    # Substitute original struct's name with effective name if different
+    original_name = struct_def.name
+    name_sub = (
+        {original_name: effective_name}
+        if original_name != effective_name
+        else {}
+    )
+
+    for address, key in get_functions_using_struct_sync(struct_id, model=model):
+        annotations = (
+            model.function_original_type_annotations.get_sync(address) or {}
+        )
+        original_annotation = annotations.get(key)
+        if not original_annotation:
+            continue
+
+        new_annotation = _substitute_struct_names(original_annotation, name_sub)
+
+        try:
+            if key == _RETURN_KEY:
+                apply_return_type_sync(address, new_annotation)
+            else:
+                apply_parameter_type_sync(address, int(key), new_annotation)
+            logger.debug(
+                "Applied type for struct",
+                struct_id=struct_id,
+                address=address,
+                key=key,
+                annotation=new_annotation,
+            )
+        except Exception as ex:
+            logger.warning(
+                "Error applying type for struct",
+                struct_id=struct_id,
+                address=address,
+                exc_info=ex,
+            )
+
+
+def reconcile_type_library_sync(*, model: "Model") -> None:
+    """
+    Compute required structs and sync IDA's type library.
+
+    1. Collect all directly used structs
+    2. Compute transitive closure (add dependencies)
+    3. Compute effective names (handling collisions by adding struct_id suffix)
+    4. Remove unused structs from IDA (in reverse dependency order)
+    5. Re-register structs whose effective name changed (in place, preserving ordinal)
+    6. Add missing structs to IDA (in dependency order)
+    """
+    required = compute_required_structs_sync(model=model)
+    registered = model.registered_struct_names.keys_sync()
+
+    needed_ids = required | registered
+    definitions = {
+        sid: d
+        for sid in needed_ids
+        if (d := model.struct_definitions.get_sync(sid)) is not None
+    }
+    dependencies = {
+        sid: (model.struct_dependencies.get_sync(sid) or [])
+        for sid in needed_ids
+    }
+
+    # Compute effective names for all required structs
+    effective_names = _compute_effective_names(required, definitions)
+
+    # Determine what needs to change
+    to_add = required - registered
+    to_remove = registered - required
+
+    # Check for structs that need re-registration (effective name changed)
+    to_reregister = set[str]()
+    for struct_id in required & registered:
+        old_effective = model.registered_struct_names.get_sync(struct_id)
+        new_effective = effective_names.get(struct_id)
+        if old_effective and new_effective and old_effective != new_effective:
+            to_reregister.add(struct_id)
+
+    if not to_add and not to_remove and not to_reregister:
+        return
+
+    # Remove unused structs in reverse order (dependents first)
+    if to_remove:
+        for struct_id in reversed(_topological_sort(to_remove, dependencies)):
+            old_effective = model.registered_struct_names.get_sync(struct_id)
+            if old_effective:
+                _remove_struct_from_ida_sync(
+                    struct_id, old_effective, model=model
+                )
+
+    # Re-register structs whose effective name changed (in place, preserving ordinal)
+    if to_reregister:
+        for struct_id in _topological_sort(to_reregister, dependencies):
+            old_effective = model.registered_struct_names.get_sync(struct_id)
+            if old_effective:
+                _reregister_struct_in_ida_sync(
+                    struct_id,
+                    old_effective,
+                    effective_names,
+                    definitions,
+                    model=model,
+                )
+
+    # Add new structs in dependency order (dependencies first)
+    if to_add:
+        for struct_id in _topological_sort(to_add, dependencies):
+            _add_struct_to_ida_sync(
+                struct_id,
+                effective_names,
+                definitions,
+                model=model,
+            )
+
+    # Apply types for all functions using structs that were added or re-registered.
+    structs_needing_type_application = to_add | to_reregister
+    if structs_needing_type_application:
+        applied_struct_ids = set[str]()
+        for address in model.function_struct_usage.keys_sync():
+            usage = model.function_struct_usage.get_sync(address)
+            if not usage:
+                continue
+            for struct_id in usage.values():
+                if struct_id in applied_struct_ids:
+                    continue
+                if struct_id in structs_needing_type_application:
+                    apply_types_for_struct_sync(struct_id, model=model)
+                    applied_struct_ids.add(struct_id)
+
+    logger.debug(
+        "Reconciled type library",
+        added=len(to_add),
+        removed=len(to_remove),
+        reregistered=len(to_reregister),
+    )
+
+
+def substitute_type_annotation_for_struct_sync(
+    type_annotation: str,
+    struct_id: ty.Optional[str],
+    *,
+    model: "Model",
+    context: ty.Optional[str] = None,
+) -> str:
+    """
+    Substitute struct name in a type annotation to the struct's effective name.
+
+    Handles collision handling: If the struct's name collides with another,
+    uses the suffixed effective name.
+
+    Args:
+        type_annotation: C type string that references the struct (uses original name)
+        struct_id: The struct ID referenced in the type annotation
+        model: The model containing struct definitions and registered names
+        context: Optional context for logging (e.g., "parameter", "return")
+
+    Returns:
+        The type annotation with the struct name substituted to the struct's
+        effective name
+    """
+    if not struct_id:
+        return type_annotation
+
+    # Get the struct's name (what's in the type annotation)
+    struct_def = model.struct_definitions.get_sync(struct_id)
+    if not struct_def:
+        return type_annotation
+    original_name = struct_def.name
+
+    # Get the effective name the struct is registered under
+    effective_name = model.registered_struct_names.get_sync(struct_id)
+
+    if not effective_name or effective_name == original_name:
+        # No substitution needed
+        return type_annotation
+
+    # Substitute struct's name with effective name
+    result = _substitute_struct_names(
+        type_annotation, {original_name: effective_name}
+    )
+
+    if result != type_annotation:
+        logger.debug(
+            "Substituted struct name in type annotation",
+            context=context,
+            original_annotation=type_annotation,
+            substituted_annotation=result,
+            original_name=original_name,
+            effective_name=effective_name,
+            struct_id=struct_id,
+        )
+
+    return result

@@ -6,7 +6,7 @@ from more_itertools import partition
 
 from decompai_client import VariablesMapping
 from decompai_ida import api, ida_tasks, inferences, logger
-from decompai_ida.model import Inference
+from decompai_ida.model import AddressInference
 from decompai_ida.tasks import ForegroundTask
 
 # Larger batches save more work when there are multiple inferences to same
@@ -20,7 +20,7 @@ _WAITBOX_TEXT = cleandoc("""
 # Types of inferences to just queue as pending, to be applied when function is
 # shown to user. This should include inferences that are not visible outside
 # decompiled code, and that are slow to apply (e.g. require decompilation).
-_INFERENCE_TYPES_TO_DEFER: set[type[Inference]] = {
+_INFERENCE_TYPES_TO_DEFER: set[type[AddressInference]] = {
     VariablesMapping,
 }
 
@@ -62,7 +62,7 @@ class ApplyInferencesTask(ForegroundTask):
                     address, deferred_inference
                 )
 
-            self._ctx.model.inference_queue.pop_sync(_BATCH_SIZE)
+            self._ctx.model.pop_inferences_sync(_BATCH_SIZE)
             self._wait_box.mark_items_complete(len(batch))
             self._ctx.model.notify_update()
             ida_tasks.execute_queued_tasks_sync()

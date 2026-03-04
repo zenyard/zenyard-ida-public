@@ -28,7 +28,8 @@ class FinishAndAnalyzeCurrentRevisionBody(BaseModel):
     """ # noqa: E501
     analyze_dependents: StrictBool
     swift_only: Optional[StrictBool] = False
-    __properties: ClassVar[List[str]] = ["analyze_dependents", "swift_only"]
+    perform_global_analysis: Optional[StrictBool] = False
+    __properties: ClassVar[List[str]] = ["analyze_dependents", "swift_only", "perform_global_analysis"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -82,7 +83,8 @@ class FinishAndAnalyzeCurrentRevisionBody(BaseModel):
 
         _obj = cls.model_validate({
             "analyze_dependents": obj.get("analyze_dependents"),
-            "swift_only": obj.get("swift_only") if obj.get("swift_only") is not None else False
+            "swift_only": obj.get("swift_only") if obj.get("swift_only") is not None else False,
+            "perform_global_analysis": obj.get("perform_global_analysis") if obj.get("perform_global_analysis") is not None else False
         })
         return _obj
 

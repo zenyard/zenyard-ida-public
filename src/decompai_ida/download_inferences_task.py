@@ -62,7 +62,7 @@ class DownloadInferencesTask(Task):
                     isinstance(inference.actual_instance, Inference)
                     and inference.actual_instance.actual_instance is not None
                 ):
-                    await self._ctx.model.inference_queue.push(
+                    await self._ctx.model.push_inference(
                         inference.actual_instance.actual_instance
                     )
                 else:

@@ -18,23 +18,20 @@ from enum import Enum
 from typing_extensions import Self
 
 
-class InferenceType(str, Enum):
+class AnalysisSource(str, Enum):
     """
-    InferenceType
+    AnalysisSource
     """
 
     """
     allowed enum values
     """
-    NAME = 'name'
-    FUNCTION_OVERVIEW = 'function_overview'
-    PARAMS = 'params'
-    VARIABLES = 'variables'
-    SWIFT_FUNCTION = 'swift_function'
+    NEW_FILE_OPEN = 'New File Open'
+    TOOLBAR_ICON_REQUEST = 'Toolbar Icon Request'
 
     @classmethod
     def from_json(cls, json_str: str) -> Self:
-        """Create an instance of InferenceType from a JSON string"""
+        """Create an instance of AnalysisSource from a JSON string"""
         return cls(json.loads(json_str))
 
 

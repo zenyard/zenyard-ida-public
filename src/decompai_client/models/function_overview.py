@@ -17,8 +17,8 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
-from typing import Any, ClassVar, Dict, List, Optional
+from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, StrictStr, field_validator
+from typing import Any, ClassVar, Dict, List, Optional, Union
 from typing_extensions import Annotated
 from typing import Optional, Set
 from typing_extensions import Self
@@ -31,7 +31,8 @@ class FunctionOverview(BaseModel):
     address: Annotated[str, Field(strict=True)]
     overview: StrictStr
     full_description: StrictStr
-    __properties: ClassVar[List[str]] = ["type", "address", "overview", "full_description"]
+    confidence: Optional[Union[StrictFloat, StrictInt]] = None
+    __properties: ClassVar[List[str]] = ["type", "address", "overview", "full_description", "confidence"]
 
     @field_validator('type')
     def type_validate_enum(cls, value):
@@ -89,6 +90,11 @@ class FunctionOverview(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # set to None if confidence (nullable) is None
+        # and model_fields_set contains the field
+        if self.confidence is None and "confidence" in self.model_fields_set:
+            _dict['confidence'] = None
+
         return _dict
 
     @classmethod
@@ -104,7 +110,8 @@ class FunctionOverview(BaseModel):
             "type": obj.get("type") if obj.get("type") is not None else 'function_overview',
             "address": obj.get("address"),
             "overview": obj.get("overview"),
-            "full_description": obj.get("full_description")
+            "full_description": obj.get("full_description"),
+            "confidence": obj.get("confidence")
         })
         return _obj
 

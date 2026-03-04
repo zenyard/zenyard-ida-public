@@ -50,6 +50,81 @@ def apply_parameter_renames_sync(address: int, renames: ty.Mapping[int, str]):
         raise Exception(f"Error while saving new type for {address:016x}")
 
 
+def apply_parameter_type_sync(
+    address: int,
+    parameter_index: int,
+    type_annotation: str,
+):
+    func_type_data = _get_func_type_data(address)
+
+    # Parse the type annotation into a tinfo_t
+    type_tinfo = ida_typeinf.tinfo_t()
+    parse_result = ida_typeinf.parse_decl(
+        type_tinfo,
+        None,  # type: ignore
+        f"{type_annotation} a;",
+        ida_typeinf.PT_SIL,
+    )
+    if parse_result is None:
+        raise Exception(f"Failed to parse type annotation: {type_annotation}")
+
+    # Set the parameter type
+    func_type_data[parameter_index].type = type_tinfo  # type: ignore
+
+    # Create and save the new function type
+    tinfo = ida_typeinf.tinfo_t()
+    success = tinfo.create_func(func_type_data)
+    if not success:
+        raise Exception(f"Error while creating new type for {address:016x}")
+
+    # Setting to TINFO_DEFINITE due to the decompiler overriding guessed types
+    success = ida_typeinf.apply_tinfo(
+        address, tinfo, ida_typeinf.TINFO_DEFINITE
+    )
+    if not success:
+        raise Exception(f"Error while saving new type for {address:016x}")
+
+
+def apply_return_type_sync(
+    address: int,
+    type_annotation: str,
+):
+    """Apply a return type annotation to a function.
+
+    Args:
+        address: Function address
+        type_annotation: C type string (e.g., "int", "void*", "MyStruct*")
+    """
+    func_type_data = _get_func_type_data(address)
+
+    # Parse the type annotation into a tinfo_t
+    type_tinfo = ida_typeinf.tinfo_t()
+    parse_result = ida_typeinf.parse_decl(
+        type_tinfo,
+        None,  # type: ignore
+        f"{type_annotation} a;",
+        ida_typeinf.PT_SIL,
+    )
+    if parse_result is None:
+        raise Exception(f"Failed to parse type annotation: {type_annotation}")
+
+    # Set the return type (KEY DIFFERENCE from parameter type)
+    func_type_data.rettype = type_tinfo
+
+    # Create and save the new function type
+    tinfo = ida_typeinf.tinfo_t()
+    success = tinfo.create_func(func_type_data)
+    if not success:
+        raise Exception(f"Error while creating new type for {address:016x}")
+
+    # Setting to TINFO_DEFINITE due to the decompiler overriding guessed types
+    success = ida_typeinf.apply_tinfo(
+        address, tinfo, ida_typeinf.TINFO_DEFINITE
+    )
+    if not success:
+        raise Exception(f"Error while saving new type for {address:016x}")
+
+
 _CFunc: tye.TypeAlias = ty.Union[ida_hexrays.cfunc_t, ida_hexrays.cfuncptr_t]
 
 

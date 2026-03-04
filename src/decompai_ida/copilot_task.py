@@ -2,7 +2,7 @@ import copy
 import typing as ty
 
 from decompai_ida import logger
-from decompai_ida.model import Message
+from decompai_ida.model import Message, Task as TodoTask
 from decompai_ida.tasks import Task, TaskContext
 from decompai_client.models.copilot_config import CopilotConfig
 from decompai_ida.copilot_tools import get_copilot_tools
@@ -14,16 +14,14 @@ import botocore.exceptions
 import google.api_core.exceptions
 import ollama
 from langchain.chat_models import init_chat_model
-from langchain.agents import create_agent
-from langchain.agents.middleware import (
-    SummarizationMiddleware,
-    ToolRetryMiddleware,
-)
+from deepagents import create_deep_agent
+from deepagents.middleware.subagents import SubAgent
+from langchain.agents.middleware import ToolRetryMiddleware
 from langchain_core.messages.human import HumanMessage
 from langchain_core.rate_limiters import InMemoryRateLimiter
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.pregel import Pregel
+from langgraph.graph.state import CompiledStateGraph
 
 
 AGENT_SYSTEM_PROMPT = """
@@ -34,25 +32,35 @@ You run inside IDA (Interactive DisAssembler); you have tools to extract informa
 You accomplish a given task iteratively, breaking it down into clear steps and working through them methodically. The general workflow is:
 
 1. Clearly understand the task and plan clear, achievable goals to accomplish it. Prioritize these goals in a logical order.
-2. Use tools to collect required information to achieve your goals. List most important findings and modify your plan if new information contradicts your existing plan. Repeat until you have the information you need to achieve your goals, or until you have no clear way to collect remaining information.
+2. Delegate exploration to the `explore` subagent to collect required information. List most important findings and modify your plan if new information contradicts your existing plan. Repeat until you have the information you need to achieve your goals, or until you have no clear way to collect remaining information.
 3. Give clear and detailed response to the question asked (if any); if asked for modifications, give summary of changes you will make (only a few examples if many).
-4. If asked for modifications, perform these in bulk.
+4. If asked for modifications, perform these in bulk using your modification tools.
 
 Rules:
 
-- At steps #2 and #4, perform as many tool calls as you know are necessary. For tools with paginated outputs, don't request more than one page in a single turn (good: invoking different tools with paginated outputs, or same tool with different filtering parameters; bad: same tool with same filtering parameters but for different pages); use your next turn to ask for next page if necessary.
+- When you need to read or explore the IDA database (decompile, list functions, read comments, resolve addresses, browse types, search), delegate to the `explore` subagent using the `task()` tool.
+- When investigating multiple orthogonal aspects (e.g. different functions, callers vs callees, code vs types), launch multiple `explore` tasks concurrently.
+- Perform modifications (renaming, setting comments/prototypes) directly using your own tools.
+- At steps #2 and #4, perform as many tool calls as you know are necessary.
 - The user may provide feedback, which you can use to make improvements and try again. But DO NOT continue in pointless back and forth conversations, i.e. don't end your responses with questions or offers for further assistance.
 - When using paginated tools, do NOT inform the user about pagination details.
 - Output markdown WITHOUT HTML tags (e.g. NO `<br>` tags). If some output requires HTML to be properly formatted, ALWAYS fall back to closest non-HTML markdown formatting.
 - When about to call tools, end your text with period, not colon.
 """.strip()
 
+EXPLORE_SYSTEM_PROMPT = """
+You are an IDA database exploration specialist. You read and analyze the currently opened binary.
+
+Use your tools to fulfill the exploration task. You have access to: function listing, decompilation, caller analysis, symbol resolution, type browsing, comment searching, and Swift source (if available).
+
+Rules:
+- For paginated tools, fetch only one page per turn; request next page in your next turn if needed.
+- Return findings as a concise, structured summary — not raw tool outputs.
+- Focus only on the exploration task given; do not suggest modifications.
+""".strip()
+
 # Shown before first tokens
 _STARTING_RESPONSE_PLACEHOLDER = "●"
-
-# Summarization configuration
-TOKENS_THRESHOLD_FOR_SUMMARIZATION = 150_000
-SUMMARIZATION_MAX_TOKENS = 10_000
 
 COPILOT_THREAD_ID = "1"
 
@@ -93,11 +101,14 @@ class CopilotTask(Task):
                 finally:
                     copilot_model.is_active = False
                     copilot_model.stop_requested = False
+                    copilot_model.tasks = []
                     copilot_model.notify_update()
             else:
                 await copilot_model.wait_for_update()
 
-    async def _handle_user_message(self, agent: Pregel, user_message: Message):
+    async def _handle_user_message(
+        self, agent: CompiledStateGraph, user_message: Message
+    ):
         config: RunnableConfig = {
             "configurable": {"thread_id": COPILOT_THREAD_ID},
             "recursion_limit": 300,
@@ -116,17 +127,41 @@ class CopilotTask(Task):
             Message("AI", _STARTING_RESPONSE_PLACEHOLDER)
         )
         copilot_model.is_active = True
+        copilot_model.tasks = []
         copilot_model.notify_update()
 
         try:
-            async for (
-                message_chunk,
-                message_metadata,
-            ) in agent.astream(
+            async for event in agent.astream(
                 {"messages": [HumanMessage(content=user_message.text)]},
                 config,
-                stream_mode="messages",
+                stream_mode=["messages", "updates"],
+                subgraphs=True,
             ):
+                namespace, mode, data = event
+
+                if mode == "updates" and isinstance(data, dict):
+                    for _node_name, node_output in data.items():
+                        if (
+                            isinstance(node_output, dict)
+                            and (todos := node_output.get("todos")) is not None
+                        ):
+                            copilot_model.tasks = [
+                                TodoTask(
+                                    content=todo["content"],
+                                    status=todo["status"],
+                                )
+                                for todo in todos
+                            ]
+                            copilot_model.notify_update()
+                    continue
+
+                # Only show root-agent messages to user; skip subagent output.
+                if namespace:
+                    continue
+
+                # mode == "messages"
+                message_chunk, message_metadata = data
+
                 # Did not see this happening, ignore such message chunks
                 if isinstance(message_metadata, str) or isinstance(
                     message_chunk, str
@@ -202,6 +237,11 @@ class CopilotTask(Task):
             model_provider=copilot_config.model_provider,
         )
         additional_params = copy.deepcopy(copilot_config.additional_params)
+
+        # Use user's API key if not already given in config.
+        if "api_key" not in additional_params:
+            additional_params["api_key"] = self._ctx.plugin_config.api_key
+
         computed_additional_params: dict[str, ty.Any] = {}
         if copilot_config.model_provider == "openai":
             import httpx
@@ -234,18 +274,6 @@ class CopilotTask(Task):
             **computed_additional_params,
         )
         tools = await get_copilot_tools(self._ctx.model)
-        llm_for_summarization = init_chat_model(
-            copilot_config.model_name,
-            model_provider=copilot_config.model_provider,
-            rate_limiter=InMemoryRateLimiter(requests_per_second=15 / 60),
-            **additional_params,
-            **computed_additional_params,
-        ).bind(max_tokens=SUMMARIZATION_MAX_TOKENS)
-
-        summarization_middleware = SummarizationMiddleware(
-            model=llm_for_summarization,
-            trigger=("tokens", TOKENS_THRESHOLD_FOR_SUMMARIZATION),
-        )
 
         # Handle tool errors gracefully by converting exceptions to error messages
         tool_error_handler = ToolRetryMiddleware(
@@ -253,12 +281,26 @@ class CopilotTask(Task):
             on_failure="continue",  # Continue execution instead of raising
         )
 
-        return create_agent(
-            llm,
-            tools,
+        explore_subagent: SubAgent = {  # type: ignore
+            "name": "explore",
+            "description": (
+                "Explores and reads the IDA database. Use for any read-only operation: "
+                "decompiling functions, listing functions, resolving symbol addresses, "
+                "reading function comments, listing callers, browsing types, and searching. "
+                "Use multiple explore agents concurrently when investigating orthogonal aspects."
+            ),
+            "system_prompt": EXPLORE_SYSTEM_PROMPT,
+            "tools": tools.exploration + tools.common,
+            "middleware": [tool_error_handler],
+        }
+
+        return create_deep_agent(
+            model=llm,
+            tools=tools.modification + tools.common,
             system_prompt=AGENT_SYSTEM_PROMPT,
             checkpointer=checkpointer,
-            middleware=[tool_error_handler, summarization_middleware],
+            middleware=[tool_error_handler],
+            subagents=[explore_subagent],  # type: ignore
             debug=self._ctx.plugin_config.log_level == "DEBUG",
         )
 
@@ -267,13 +309,21 @@ def exception_to_user_message(exception: Exception) -> str:
     """
     Translate an exception into a user-facing error message for the copilot chat.
     """
+    # Join the list into a single string
     if _is_rate_limit_Error(exception):
         return "This request was rate-limited. Please try again soon."
-
+    if _is_quota_exceeded(exception):
+        return "User's quota exhausted. Upgrade or Contact us to continue."
     return (
         "I encountered an error while processing your request. "
         "Please try again or rephrase your question."
     )
+
+
+def _is_quota_exceeded(exception: Exception):
+    if str(getattr(exception, "status_code", "")) == "402":
+        return True
+    return False
 
 
 def _is_rate_limit_Error(exception: Exception) -> bool:

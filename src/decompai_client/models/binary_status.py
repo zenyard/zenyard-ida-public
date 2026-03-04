@@ -19,6 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict
 from typing import Any, ClassVar, Dict, List
+from decompai_client.models.binary_state import BinaryState
 from decompai_client.models.revision_analysis_status import RevisionAnalysisStatus
 from typing import Optional, Set
 from typing_extensions import Self
@@ -28,7 +29,8 @@ class BinaryStatus(BaseModel):
     BinaryStatus
     """ # noqa: E501
     revision_analyses: List[RevisionAnalysisStatus]
-    __properties: ClassVar[List[str]] = ["revision_analyses"]
+    state: BinaryState
+    __properties: ClassVar[List[str]] = ["revision_analyses", "state"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -76,6 +78,9 @@ class BinaryStatus(BaseModel):
                 if _item_revision_analyses:
                     _items.append(_item_revision_analyses.to_dict())
             _dict['revision_analyses'] = _items
+        # override the default output from pydantic by calling `to_dict()` of state
+        if self.state:
+            _dict['state'] = self.state.to_dict()
         return _dict
 
     @classmethod
@@ -88,7 +93,8 @@ class BinaryStatus(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "revision_analyses": [RevisionAnalysisStatus.from_dict(_item) for _item in obj["revision_analyses"]] if obj.get("revision_analyses") is not None else None
+            "revision_analyses": [RevisionAnalysisStatus.from_dict(_item) for _item in obj["revision_analyses"]] if obj.get("revision_analyses") is not None else None,
+            "state": BinaryState.from_dict(obj["state"]) if obj.get("state") is not None else None
         })
         return _obj
 

@@ -1,10 +1,17 @@
-import time
+from dataclasses import dataclass
 import anyio
 import typing as ty
 
+from decompai_client.models.binary_state import BinaryState
 from decompai_ida import logger
-from decompai_ida.model import RemoteAnalysisStats
 from decompai_ida.tasks import Task, TaskContext
+
+
+@dataclass(frozen=True)
+class _ServerStatus:
+    revision: float
+    state: BinaryState
+
 
 _POLL_INTERVAL = 3
 
@@ -23,36 +30,31 @@ class PollServerStatusTask(Task):
                     await self._ctx.model.revision.get()
                 )
 
-                if self._ctx.model.runtime_status.remote_analysis_stats:
-                    stats = self._ctx.model.runtime_status.remote_analysis_stats
-                    await logger.ainfo(
-                        "Server analysis complete",
-                        duration_seconds=time.monotonic() - stats.start_time,
-                    )
-
                 self._max_server_version = None
-                self._ctx.model.runtime_status.remote_analysis_stats = None
                 self._ctx.model.notify_update()
                 await self._wait_for_client_to_be_ahead_of_server()
 
-            new_server_revision = await self._poll_server()
-            if self._ctx.model.runtime_status.remote_analysis_stats is None:
-                self._ctx.model.runtime_status.remote_analysis_stats = (
-                    RemoteAnalysisStats(
-                        start_time=time.monotonic(),
-                        start_revision=new_server_revision,
-                    )
+            server_status = await self._poll_server()
+
+            if (
+                self._ctx.model.runtime_status.binary_state
+                != server_status.state
+            ):
+                self._ctx.model.runtime_status.binary_state = (
+                    server_status.state
                 )
                 self._ctx.model.notify_update()
 
-            if new_server_revision != (
+            if server_status.revision != (
                 await self._ctx.model.server_revision.get()
             ):
                 await logger.ainfo(
                     "Server revision updated",
-                    new_server_revision=new_server_revision,
+                    new_server_revision=server_status.revision,
                 )
-                await self._ctx.model.server_revision.set(new_server_revision)
+                await self._ctx.model.server_revision.set(
+                    server_status.revision
+                )
                 self._ctx.model.notify_update()
 
             await anyio.sleep(_POLL_INTERVAL)
@@ -66,18 +68,19 @@ class PollServerStatusTask(Task):
             await self._ctx.model.server_revision.get()
         )
 
-    async def _poll_server(self) -> float:
+    async def _poll_server(self) -> _ServerStatus:
         binary_id = await self._ctx.model.binary_id.get()
         assert binary_id is not None
 
-        revision = await self._ctx.model.revision.get()
+        local_revision = await self._ctx.model.revision.get()
         status = await self._retry_api_request_forever(
             lambda: self._ctx.binaries_api.get_detailed_status(
                 binary_id=binary_id
             ),
         )
+        self._ctx.model.notify_update()
 
-        log = logger.bind(local_revision=revision)
+        log = logger.bind(local_revision=local_revision)
 
         if len(status.revision_analyses) > 0:
             current_target_revision = max(
@@ -95,13 +98,13 @@ class PollServerStatusTask(Task):
                 server_target_revision=self._max_server_version,
                 server_missing_progress=missing_progress,
             )
-            progress = self._max_server_version - missing_progress
+            server_revision = self._max_server_version - missing_progress
         else:
             # Server completed at least the revision stored in DB
             # before calling API.
-            progress = revision
+            server_revision = local_revision
             log = log.bind(server_status="idle")
 
-        await log.adebug("Got server status", progress=progress)
+        await log.adebug("Got server status", server_revision=server_revision)
 
-        return progress
+        return _ServerStatus(revision=server_revision, state=status.state)

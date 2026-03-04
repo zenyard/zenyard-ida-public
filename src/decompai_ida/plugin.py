@@ -56,4 +56,17 @@ def main_loop():
 
 
 def PLUGIN_ENTRY():
+    import ida_kernwin  # type: ignore
+
+    try:
+        is_lib = ida_kernwin.is_ida_library()  # type: ignore
+    except Exception:
+        try:
+            is_lib = ida_kernwin.is_ida_library(None, 0, None)  # type: ignore
+        except Exception:
+            is_lib = False
+
+    if is_lib:
+        return
+
     return DecompaiPlugin()

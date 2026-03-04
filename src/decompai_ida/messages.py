@@ -6,6 +6,12 @@ import ida_kernwin
 from decompai_client.models.swift_rejection_reason import SwiftRejectionReason
 
 from decompai_ida import ida_tasks
+from decompai_ida.contact_us_mailto import (
+    EMAIL_ADDRESS,
+    EMAIL_BODY,
+    EMAIL_SUBJECT,
+    send_email_with_mailto,
+)
 
 
 async def confirm_analyze_binary() -> bool:
@@ -54,11 +60,18 @@ async def warn_bad_credentials_message():
 
 async def warn_binary_exceeds_max_size(*, max_size_mb: int):
     message = cleandoc(f"""
-        The demo version of Zenyard supports binaries up to {max_size_mb}MB (full versions have no limit).
-        As this database exceeds the limit, Zenyard has been disabled for this session.
+        BUTTON YES Contact Us
+        BUTTON CANCEL Close
+        Binary Size Exceeded
+        Oops, this binary is over the {max_size_mb} MB limit for the Zenyard free trial.
+        The full version supports larger files with no size limit.
+
+        Need larger-file support? Contact us: {EMAIL_ADDRESS}
     """)
 
-    await ida_tasks.run_ui(ida_kernwin.warning, message)
+    result = await ida_tasks.run_ui(ida_kernwin.ask_form, message)
+    if result == ida_kernwin.ASKBTN_YES:
+        send_email_with_mailto(EMAIL_ADDRESS, EMAIL_SUBJECT, EMAIL_BODY)
 
 
 def inform_no_swift_source_code_sync(
@@ -84,3 +97,17 @@ def warn_cant_open_swift_pseudocode_sync():
     ida_kernwin.warning(
         "AUTOHIDE NONE\nCould not open pseudocode for Swift function."
     )
+
+
+async def warn_plan_ended():
+    _BINARY_PAUSED_MESSAGE = cleandoc(f"""
+        BUTTON YES Contact Us
+        BUTTON CANCEL Close 
+        Usage Limit Reached
+                                    
+        You’ve used all of your Zenyard quota for your current plan.
+        Contact us to continue: {EMAIL_ADDRESS}
+    """)
+    form = await ida_tasks.run_ui(ida_kernwin.ask_form, _BINARY_PAUSED_MESSAGE)
+    if form == ida_kernwin.ASKBTN_YES:
+        send_email_with_mailto(EMAIL_ADDRESS, EMAIL_SUBJECT, EMAIL_BODY)

@@ -29,6 +29,7 @@ from decompai_ida.broadcast_ida_events_task import (
 from decompai_ida.download_inferences_task import DownloadInferencesTask
 from decompai_ida.events import DatabaseOpened, EventRecorder, IdaEvent
 from decompai_ida.fetch_user_config_task import FetchUserConfigTask
+from decompai_ida.fetch_user_plan_task import FetchUserPlanTask
 from decompai_ida.inline_shannon_debug_traces_task import (
     InlineShannonDebugTracesTask,
 )
@@ -41,6 +42,9 @@ from decompai_ida.poll_server_status_task import PollServerStatusTask
 from decompai_ida.register_binary_task import (
     BinaryExceedsSizeLimitError,
     RegisterBinaryTask,
+)
+from decompai_ida.show_binary_paused_dialog_task import (
+    ShowBinaryPausedDialogTask,
 )
 from decompai_ida.show_initial_upload_message_task import (
     ShowInitialUploadMessageTask,
@@ -116,6 +120,7 @@ _TASKS: ty.Collection[type[Task]] = (
 # Tasks that run when a DB is open and plugin is active.
 _ACTIVE_TASKS: ty.Collection[type[Task]] = (
     DownloadInferencesTask,
+    FetchUserPlanTask,
     MonitorInitialAnalysisTask,
     PollServerStatusTask,
     AskInitialQuestions,
@@ -126,6 +131,7 @@ _ACTIVE_TASKS: ty.Collection[type[Task]] = (
     UploadOriginalFilesTask,
     UploadSectionsTask,
     UploadRevisionsTask,
+    ShowBinaryPausedDialogTask,
 )
 
 _stop: ty.Optional[ty.Callable[[bool], None]] = None

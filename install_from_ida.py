@@ -2,6 +2,7 @@
 #   https://github.com/eset/ipyida/blob/master/install_from_ida.py
 
 import base64
+from dataclasses import dataclass
 import json
 import re
 import shutil
@@ -18,11 +19,12 @@ import ida_diskio
 import ida_kernwin
 
 API_URL = globals().get("ZENYARD_API_URL", "https://api.zenyard.ai")
+REPOSITORY = globals().get("ZENYARD_REPOSITORY", "zenyard/zenyard-ida-public")
 GIT_TOKEN = globals().get("GIT_TOKEN")
-INSTALL_LOCATION = (
-    f"git+https://{GIT_TOKEN}@github.com/zenyard/decompai-ida-public.git"
+INSTALL_LOCATION = f"git+https://{GIT_TOKEN}@github.com/{REPOSITORY}.git"
+STUB_FILE_URL = (
+    f"https://raw.githubusercontent.com/{REPOSITORY}/main/decompai_stub.py"
 )
-STUB_FILE_URL = "https://raw.githubusercontent.com/zenyard/decompai-ida-public/main/decompai_stub.py"
 
 user_dir = Path(ida_diskio.get_user_idadir())
 stub_path = user_dir / "plugins" / "decompai_stub.py"
@@ -100,21 +102,42 @@ def main():
 _IDA_VERSION_PATTERN = re.compile(r"^(\d+)\.(\d+)")
 
 
-def get_ida_version() -> tuple[int, int]:
+@dataclass(frozen=True, order=True)
+class IdaVersion:
+    major: int
+    minor: int
+    sp: int
+
+    def __str__(self) -> str:
+        if self.sp == 0:
+            return f"{self.major}.{self.minor}"
+        else:
+            return f"{self.major}.{self.minor}sp{self.sp}"
+
+
+def get_ida_version() -> IdaVersion:
     ida_version = run_in_ui(ida_kernwin.get_kernel_version)
     m = _IDA_VERSION_PATTERN.match(ida_version)
     if m is None:
         raise Exception("Can't parse IDA version")
-    return (int(m.group(1)), int(m.group(2)))
+    major = int(m.group(1))
+    minor = int(m.group(2))
+    service_pack = (
+        1
+        if (major, minor) == (9, 0) and hasattr(ida_kernwin, "BWN_DISASMS")
+        else 0
+    )
+    return IdaVersion(major=major, minor=minor, sp=service_pack)
 
 
 def check_prerequisites():
-    if sys.version_info < (3, 10):
-        raise Exception(f"Python 3.10 or higher required, got {sys.version}")
+    py_major, py_minor = sys.version_info.major, sys.version_info.minor
+    if (py_major, py_minor) < (3, 11):
+        raise Exception(f"Python 3.11 or higher required, got {sys.version}")
 
     ida_version = get_ida_version()
-    if ida_version < (9, 0):
-        raise Exception("IDA 9.0 or higher required")
+    if ida_version < IdaVersion(9, 0, sp=1):
+        raise Exception("IDA 9.0sp1 or higher required")
 
     if shutil.which("git") is None:
         raise Exception("Git is required for installation")
@@ -127,7 +150,7 @@ def check_prerequisites():
     try:
 
         def import_qt():
-            if ida_version >= (9, 2):
+            if ida_version >= IdaVersion(9, 2, 0):
                 from PySide6 import QtWidgets as QtWidgets  # type: ignore
                 from PySide6 import QtCore as QtCore  # type: ignore
                 from PySide6 import QtGui as QtGui  # type: ignore
@@ -142,7 +165,7 @@ def check_prerequisites():
         py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
 
         raise Exception(
-            f"IDA {ida_version[0]}.{ida_version[1]} isn't compatible with Python {py_version}. "
+            f"IDA {ida_version} isn't compatible with Python {py_version}. "
             "Please upgrade IDA or downgrade Python."
         )
 

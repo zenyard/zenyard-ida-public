@@ -17,23 +17,25 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr
+from pydantic import BaseModel, ConfigDict, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
-from typing_extensions import Annotated
-from decompai_client.models.plan_config import PlanConfig
-from decompai_client.models.user_config_request import UserConfigRequest
+from decompai_client.models.decompiler_enum import DecompilerEnum
+from decompai_client.models.os_enum import OSEnum
 from typing import Optional, Set
 from typing_extensions import Self
 
-class CreateUserRequest(BaseModel):
+class ExtraDetails(BaseModel):
     """
-    CreateUserRequest
+    Complete environment details sent with every event.
     """ # noqa: E501
-    email: StrictStr
-    name: Annotated[str, Field(min_length=1, strict=True)]
-    config: Optional[UserConfigRequest] = None
-    plan: PlanConfig
-    __properties: ClassVar[List[str]] = ["email", "name", "config", "plan"]
+    decompiler: DecompilerEnum
+    decompiler_version: StrictStr
+    os_type: OSEnum
+    os_version: Optional[StrictStr]
+    plugin_version: StrictStr
+    install_id: StrictStr
+    session_id: StrictStr
+    __properties: ClassVar[List[str]] = ["decompiler", "decompiler_version", "os_type", "os_version", "plugin_version", "install_id", "session_id"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -53,7 +55,7 @@ class CreateUserRequest(BaseModel):
 
     @classmethod
     def from_json(cls, json_str: str) -> Optional[Self]:
-        """Create an instance of CreateUserRequest from a JSON string"""
+        """Create an instance of ExtraDetails from a JSON string"""
         return cls.from_dict(json.loads(json_str))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -74,17 +76,16 @@ class CreateUserRequest(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
-        # override the default output from pydantic by calling `to_dict()` of config
-        if self.config:
-            _dict['config'] = self.config.to_dict()
-        # override the default output from pydantic by calling `to_dict()` of plan
-        if self.plan:
-            _dict['plan'] = self.plan.to_dict()
+        # set to None if os_version (nullable) is None
+        # and model_fields_set contains the field
+        if self.os_version is None and "os_version" in self.model_fields_set:
+            _dict['os_version'] = None
+
         return _dict
 
     @classmethod
     def from_dict(cls, obj: Optional[Dict[str, Any]]) -> Optional[Self]:
-        """Create an instance of CreateUserRequest from a dict"""
+        """Create an instance of ExtraDetails from a dict"""
         if obj is None:
             return None
 
@@ -92,10 +93,13 @@ class CreateUserRequest(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "email": obj.get("email"),
-            "name": obj.get("name"),
-            "config": UserConfigRequest.from_dict(obj["config"]) if obj.get("config") is not None else None,
-            "plan": PlanConfig.from_dict(obj["plan"]) if obj.get("plan") is not None else None
+            "decompiler": obj.get("decompiler"),
+            "decompiler_version": obj.get("decompiler_version"),
+            "os_type": obj.get("os_type"),
+            "os_version": obj.get("os_version"),
+            "plugin_version": obj.get("plugin_version"),
+            "install_id": obj.get("install_id"),
+            "session_id": obj.get("session_id")
         })
         return _obj
 

@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="https://cdn.prod.website-files.com/6852d8be1c1c81e6e1da6378/698c510f30bcf7abaa94c7cb_Logo.svg" alt="Zenyard logo" width="300" />
+  <img src="./zenyard_logo.svg" alt="Zenyard logo" width="300" />
 </p>
 
 <p align="center">
   <a href="https://zenyard.ai">zenyard.ai</a>
   &nbsp;&nbsp;&middot;&nbsp;&nbsp;
-  <a href="https://zenyard.notion.site/Setting-up-Zenyard-in-IDA-Pro-309e2d30327680caa419d779a0c09ddb">Setup Guide</a>
+  <a href="https://zenyard.notion.site/Setting-up-Zenyard-in-IDA-Pro-309e2d30327680caa419d779a0c09ddb">User Guide</a>
 </p>
 
 # Zenyard for IDA Pro
@@ -16,17 +16,10 @@ Zenyard brings AI-powered reverse engineering directly into your workflow. It au
 
 This repository serves as the official distribution hub for the Zenyard client for IDA Pro.
 
-## 📥 Download & Installation
-
-Type the following command into the Python window in IDA Pro: {command}
+## 📥 Installation
 
 For system requirements and a short setup guide, please refer to:
 * **[IDA Pro Setup & Installation Guide](https://zenyard.notion.site/Setting-up-Zenyard-in-IDA-Pro-309e2d30327680caa419d779a0c09ddb)**
-
-## 📖 Documentation & Usage
-
-To ensure our guides are always up-to-date, we maintain all of our documentation, workflows, and feature breakdowns in our official user guides:
-* **[The 5-Minute Quick Start Guide](https://zenyard.notion.site/Welcome-to-Zenyard-316e2d30327680edb1aff7092ddd3230)**
 
 ## ✉️ Contact & Support
 
@@ -43,7 +36,7 @@ Zenyard offers both free and paid plans. Your current usage is always visible in
 
 Binary size limits may apply depending on your plan. If a binary exceeds your plan's limit, a prompt will guide you to the appropriate plan.
 
-## ⚖️ License
+## License
 
 This project is licensed under the **GNU Affero General Public License v3.0 only**.
 

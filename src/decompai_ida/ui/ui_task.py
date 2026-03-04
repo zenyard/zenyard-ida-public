@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 import anyio
 from qtpy.QtWidgets import QApplication, QMainWindow
 
-from decompai_ida import ida_tasks, logger
+from decompai_ida import ida_tasks, logger, messages
 from decompai_ida.apply_inferences_task import ApplyInferencesTask
 from decompai_ida.ask_initial_questions_task import ShowInitialQuestionsTask
 from decompai_ida.queue_revisions_task import QueueRevisionsTask
@@ -41,12 +41,14 @@ class UiTask(Task):
         save_results_callback = ida_tasks.AsyncCallback(
             self._on_save_results_clicked
         )
+        usage_callback = ida_tasks.AsyncCallback(self._on_usage_clicked)
 
         def setup_sync():
             main_window = _find_main_window()
             widget = StatusBarWidget(view_model)
             widget.upload_clicked.connect(upload_callback)
             widget.save_results_clicked.connect(save_results_callback)
+            widget.usage_clicked.connect(usage_callback)
             main_window.statusBar().addPermanentWidget(widget)
             return main_window, widget
 
@@ -80,6 +82,10 @@ class UiTask(Task):
             ApplyInferencesTask()
         )
         self._ctx.model.notify_update()
+
+    async def _on_usage_clicked(self):
+        """Handle click on usage label - show binary paused dialog."""
+        await messages.warn_plan_ended()
 
 
 def _find_main_window() -> QMainWindow:

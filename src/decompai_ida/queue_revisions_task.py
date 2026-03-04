@@ -37,6 +37,7 @@ class BaseQueueRevisionsTask(ForegroundTask):
 
     def _run(self) -> None:
         self._buffer = list[_BufferedObject]()
+        self._pending_flush: ty.Optional[tuple[_BufferedObject, ...]] = None
 
         self._wait_box.start_new_task(_SCANNING_WAITBOX_TEXT)
 
@@ -62,6 +63,9 @@ class BaseQueueRevisionsTask(ForegroundTask):
 
         if len(self._buffer) > 0:
             self._flush_revision()
+
+        if self._pending_flush is not None:
+            self._push_pending_flush(is_last=True)
 
         self._ctx.model.notify_update()
 
@@ -104,32 +108,44 @@ class BaseQueueRevisionsTask(ForegroundTask):
             <= self._ctx.static_config.max_objects_in_revision
         )
 
-        logger.info("Queueing revision", object_count=len(self._buffer))
+        if self._pending_flush is not None:
+            self._push_pending_flush(is_last=False)
+
+        self._pending_flush = tuple(self._buffer)
+        self._buffer.clear()
+
+    def _push_pending_flush(self, *, is_last: bool) -> None:
+        assert self._pending_flush is not None
+
+        pending = self._pending_flush
+        self._pending_flush = None
+
+        logger.info("Queueing revision", object_count=len(pending))
 
         self._ctx.model.revision_queue.push_sync(
             self._create_revision(
-                tuple(
-                    buffered_object.object for buffered_object in self._buffer
-                )
+                tuple(buffered_object.object for buffered_object in pending),
+                is_last=is_last,
             )
         )
 
         # Mark all objects uploaded and clean.
-        for buffered_object in self._buffer:
+        for buffered_object in pending:
             self._ctx.model.sync_status.set_sync(
                 buffered_object.address,
                 SyncStatus(uploaded_hash=buffered_object.hash, dirty=False),
             )
             logger.debug("Object marked clean", address=buffered_object.address)
 
-        self._buffer.clear()
         self._ctx.model.notify_update()
 
     @abstractmethod
     def _get_symbols_to_queue(self) -> ty.Iterable[Symbol]: ...
 
     @abstractmethod
-    def _create_revision(self, objects: tuple[Object, ...]) -> Revision: ...
+    def _create_revision(
+        self, objects: tuple[Object, ...], *, is_last: bool
+    ) -> Revision: ...
 
 
 class QueueRevisionsTask(BaseQueueRevisionsTask):
@@ -160,7 +176,11 @@ class QueueRevisionsTask(BaseQueueRevisionsTask):
             if sync_status.dirty:
                 yield symbol
 
-    def _create_revision(self, objects: tuple[Object, ...]) -> Revision:
+    def _create_revision(
+        self, objects: tuple[Object, ...], *, is_last: bool
+    ) -> Revision:
         return Revision(
-            objects=objects, is_initial_analysis=self._is_initial_upload
+            objects=objects,
+            is_initial_analysis=self._is_initial_upload,
+            perform_global_analysis=is_last,
         )

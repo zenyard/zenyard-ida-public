@@ -55,7 +55,9 @@ class RegisterBinaryTask(Task):
             has_swift = True
 
         platform, os_version = await extract_platform_and_os_version()
-
+        input_file_sha256 = await ida_tasks.run(
+            ida_nalt.retrieve_input_file_sha256
+        )
         post_body = PostBinaryBody(
             name=binary_path.name,
             details=BinaryDetails(
@@ -63,6 +65,7 @@ class RegisterBinaryTask(Task):
                 original_languages=OriginalLanguages(swift=has_swift),
                 platform=platform,
                 os_version=os_version,
+                input_file_sha256=input_file_sha256.hex(),
             ),
         )
 

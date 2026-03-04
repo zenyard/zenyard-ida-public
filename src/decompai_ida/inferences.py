@@ -14,18 +14,28 @@ from decompai_client import (
     Name,
     NotSwift,
     ParametersMapping,
+    ParameterType,
+    ReturnType,
+    StructDefinition,
     VariablesMapping,
     SwiftFunction,
 )
-from decompai_ida import api, logger, markdown
+from decompai_ida import api, logger, markdown, type_manager
 from decompai_ida.events import block_ida_events
 from decompai_ida.lvars import (
     apply_parameter_renames_sync,
+    apply_parameter_type_sync,
+    apply_return_type_sync,
     apply_variable_renames_sync,
     get_parameter_names_sync,
     get_variable_names_sync,
 )
-from decompai_ida.model import Inference, Model
+from decompai_ida.model import (
+    AddressInference,
+    GlobalInference,
+    Inference,
+    Model,
+)
 
 
 _MAX_LINES_IN_EXISTING_COMMENT_APPEND_TO = 3
@@ -44,18 +54,68 @@ def apply_pending_inferences_sync(address: int, *, model: Model):
         model.pending_inferences.clear_address_sync(address)
 
 
-def apply_inferences_sync(inferences: ty.Iterable[Inference], *, model: Model):
-    by_address = defaultdict[int, list[Inference]](list)
-    for inference in inferences:
-        by_address[api.parse_address(inference.address)].append(inference)
+def _track_struct_usage(
+    address: int,
+    inferences: ty.Collection[AddressInference],
+    *,
+    model: Model,
+) -> None:
+    """
+    Track struct usage from inferences without applying them to IDA.
 
-    for address, inferences in by_address.items():
-        _apply_inferences_for_address(address, inferences, model=model)
+    This must be called before reconcile_type_library_sync so it knows which
+    structs are needed and can compute effective names for collisions.
+    """
+    for inference in inferences:
+        if isinstance(inference, ParameterType):
+            type_manager.set_parameter_struct_sync(
+                address,
+                inference.parameter_index,
+                inference.struct_id,
+                model=model,
+            )
+        elif isinstance(inference, ReturnType):
+            type_manager.set_return_struct_sync(
+                address,
+                inference.struct_id,
+                model=model,
+            )
+
+
+def apply_inferences_sync(inferences: ty.Iterable[Inference], *, model: Model):
+    # Partition inferences into global and address-bound
+    global_inferences: list[GlobalInference] = []
+    by_address = defaultdict[int, list[AddressInference]](list)
+
+    for inference in inferences:
+        # GlobalInference types (StructDefinition) don't have 'address' attribute
+        if isinstance(inference, StructDefinition):
+            global_inferences.append(inference)
+        else:
+            # AddressInference types all have address field
+            by_address[api.parse_address(inference.address)].append(inference)
+
+    # Apply global inferences first (they define types used by address inferences)
+    if global_inferences:
+        _apply_global_inferences(global_inferences, model=model)
+
+    # Track struct usage from all inferences BEFORE reconciling
+    # This allows reconcile to know which structs are needed and compute effective names
+    for address, address_inferences in by_address.items():
+        _track_struct_usage(address, address_inferences, model=model)
+
+    # Reconcile IDA's type library - computes effective names for collisions
+    # Must happen AFTER tracking usage but BEFORE applying types
+    type_manager.reconcile_type_library_sync(model=model)
+
+    # Apply address-bound inferences (can now substitute names correctly)
+    for address, address_inferences in by_address.items():
+        _apply_inferences_for_address(address, address_inferences, model=model)
 
 
 def _apply_inferences_for_address(
     address: int,
-    inferences: ty.Collection[Inference],
+    inferences: ty.Collection[AddressInference],
     *,
     model: Model,
 ):
@@ -80,6 +140,10 @@ def _apply_inferences_for_address(
                 elif isinstance(inference, (SwiftFunction, NotSwift)):
                     # Nothing to do - inference read from model when needed.
                     pass
+                elif isinstance(inference, ParameterType):
+                    _apply_parameter_type(inference, model=model)
+                elif isinstance(inference, ReturnType):
+                    _apply_return_type(inference, model=model)
                 else:
                     _: tye.Never = inference
             except Exception as ex:
@@ -91,6 +155,44 @@ def _apply_inferences_for_address(
                 logger.warning("Error while saving inference", exc_info=ex)
 
     _update_pseudocode_viewer_for_address(address)
+
+
+def _apply_global_inferences(
+    inferences: ty.Collection[GlobalInference],
+    *,
+    model: Model,
+):
+    """
+    Apply global inferences (type definitions, struct definitions, etc.) to the IDB.
+
+    Global inferences are not bound to specific addresses and affect the entire binary.
+    They should be applied before address-bound inferences since they may define types
+    used by those inferences.
+
+    Note: Struct definitions are stored but not immediately added to IDA's type library.
+    The reconcile_type_library_sync() function handles adding/removing structs based
+    on actual usage.
+    """
+    with (
+        structlog.contextvars.bound_contextvars(global_inferences=True),
+        block_ida_events(),
+    ):
+        logger.debug("Applying global inferences", count=len(inferences))
+        for inference in inferences:
+            try:
+                if isinstance(inference, StructDefinition):
+                    # Store the struct definition and compute dependencies
+                    # Don't add to IDA yet - reconcile_type_library_sync handles that
+                    type_manager.register_struct_definition_sync(
+                        inference, model=model
+                    )
+                else:
+                    # Exhaustiveness check - should never happen
+                    _: tye.Never = inference
+            except Exception as ex:
+                logger.warning(
+                    "Error while applying global inference", exc_info=ex
+                )
 
 
 def _update_pseudocode_viewer_for_address(address: int):
@@ -146,7 +248,9 @@ def _get_last_inference_type(
     )
 
 
-def _apply_local_transformations(inference: Inference) -> Inference:
+def _apply_local_transformations(
+    inference: AddressInference,
+) -> AddressInference:
     if isinstance(inference, FunctionOverview):
         overview = inference
         return overview.model_copy(
@@ -323,3 +427,96 @@ def _apply_parameters(parameters_mapping: ParametersMapping, *, model: Model):
         if new_name is not None:
             renames[parameter_index] = new_name
     apply_parameter_renames_sync(address, renames)
+
+
+def _apply_parameter_type(parameter_type: ParameterType, *, model: Model):
+    address = api.parse_address(parameter_type.address)
+
+    # Track struct usage for this parameter (handles replacement of previous struct)
+    type_manager.set_parameter_struct_sync(
+        address,
+        parameter_type.parameter_index,
+        parameter_type.struct_id,
+        model=model,
+    )
+
+    # Store original annotation for applying/re-applying when struct becomes
+    # available or gets renamed
+    type_manager.set_original_type_annotation_sync(
+        address,
+        str(parameter_type.parameter_index),
+        parameter_type.type_annotation,
+        model=model,
+    )
+
+    # Check if struct is registered - if not, reconcile will apply later
+    if parameter_type.struct_id:
+        if (
+            model.registered_struct_names.get_sync(parameter_type.struct_id)
+            is None
+        ):
+            logger.debug(
+                "Struct not registered yet, will apply type after reconcile",
+                struct_id=parameter_type.struct_id,
+            )
+            return
+
+    # Substitute struct name using the specific struct_id to handle collisions correctly
+    type_annotation = type_manager.substitute_type_annotation_for_struct_sync(
+        parameter_type.type_annotation,
+        parameter_type.struct_id,
+        model=model,
+        context=f"parameter[{parameter_type.parameter_index}]",
+    )
+
+    apply_parameter_type_sync(
+        address,
+        parameter_type.parameter_index,
+        type_annotation,
+    )
+
+
+def _apply_return_type(return_type: ReturnType, *, model: Model):
+    """Apply return type inference to a function."""
+    address = api.parse_address(return_type.address)
+
+    # Track struct usage for this return type (handles replacement of previous struct)
+    type_manager.set_return_struct_sync(
+        address,
+        return_type.struct_id,
+        model=model,
+    )
+
+    # Store original annotation for applying/re-applying when struct becomes
+    # available or gets renamed
+    type_manager.set_original_type_annotation_sync(
+        address,
+        "return",
+        return_type.type_annotation,
+        model=model,
+    )
+
+    # Check if struct is registered - if not, reconcile will apply later
+    if return_type.struct_id:
+        if (
+            model.registered_struct_names.get_sync(return_type.struct_id)
+            is None
+        ):
+            logger.debug(
+                "Struct not registered yet, will apply type after reconcile",
+                struct_id=return_type.struct_id,
+            )
+            return
+
+    # Substitute struct name using the specific struct_id to handle collisions correctly
+    type_annotation = type_manager.substitute_type_annotation_for_struct_sync(
+        return_type.type_annotation,
+        return_type.struct_id,
+        model=model,
+        context="return",
+    )
+
+    apply_return_type_sync(
+        address,
+        type_annotation,
+    )

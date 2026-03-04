@@ -110,9 +110,9 @@ def _compress_gzip(file_obj: ty.IO[bytes]) -> bytes:
     return compressed_buffer.getvalue()
 
 
-def get_platform_and_os_version_sync() -> (
-    ty.Tuple[ty.Optional[str], ty.Optional[str]]
-):
+def get_platform_and_os_version_sync() -> ty.Tuple[
+    ty.Optional[str], ty.Optional[str]
+]:
     """
     Extracts platform and OS version from Mach-O build_version_command structure.
     Returns tuple of (platform, os_version), both can be None if extraction fails.

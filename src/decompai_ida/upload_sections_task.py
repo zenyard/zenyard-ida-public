@@ -154,23 +154,26 @@ class UploadSectionsTask(Task):
                     compressed_size=len(compressed_data),
                 )
                 await self._retry_api_request_forever(
-                    lambda section=section,
-                    compressed_data=compressed_data: self._ctx.binaries_api.set_large_data_to_object(
-                        address=section.address,
-                        binary_id=binary_id,
-                        compressed_data=compressed_data,
+                    lambda section=section, compressed_data=compressed_data: (
+                        self._ctx.binaries_api.set_large_data_to_object(
+                            address=section.address,
+                            binary_id=binary_id,
+                            compressed_data=compressed_data,
+                        )
                     ),
                     description=f"Upload data for section {section.name}",
                     max_retries=_MAX_RETRIES_FOR_REVISION_REQUEST,
                 )
 
             await self._retry_api_request_forever(
-                lambda: self._ctx.binaries_api.finish_and_analyze_current_revision(
-                    binary_id=binary_id,
-                    finish_and_analyze_current_revision_body=FinishAndAnalyzeCurrentRevisionBody(
-                        analyze_dependents=False,
-                        swift_only=False,
-                    ),
+                lambda: (
+                    self._ctx.binaries_api.finish_and_analyze_current_revision(
+                        binary_id=binary_id,
+                        finish_and_analyze_current_revision_body=FinishAndAnalyzeCurrentRevisionBody(
+                            analyze_dependents=False,
+                            swift_only=False,
+                        ),
+                    )
                 ),
                 description=f"Finish revision {next_revision}",
                 max_retries=_MAX_RETRIES_FOR_REVISION_REQUEST,

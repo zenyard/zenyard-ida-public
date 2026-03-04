@@ -80,26 +80,31 @@ class UploadRevisionsTask(Task):
                     chunk_index=i,
                 )
                 await self._retry_api_request_forever(
-                    lambda: self._ctx.binaries_api.add_objects_to_current_revision(
-                        binary_id=binary_id,
-                        add_objects_to_current_revision_params=AddObjectsToCurrentRevisionParams(
-                            objects=chunk,
-                        ),
+                    lambda: (
+                        self._ctx.binaries_api.add_objects_to_current_revision(
+                            binary_id=binary_id,
+                            add_objects_to_current_revision_params=AddObjectsToCurrentRevisionParams(
+                                objects=chunk,
+                            ),
+                        )
                     ),
                     description=(
-                        f"Upload chunk #{i+1} with {len(chunk)} objects to revision {next_revision}"
+                        f"Upload chunk #{i + 1} with {len(chunk)} objects to revision {next_revision}"
                     ),
                     max_retries=_MAX_RETRIES_FOR_REVISION_REQUEST,
                 )
 
             await logger.adebug("Finishing revision")
             await self._retry_api_request_forever(
-                lambda: self._ctx.binaries_api.finish_and_analyze_current_revision(
-                    binary_id=binary_id,
-                    finish_and_analyze_current_revision_body=FinishAndAnalyzeCurrentRevisionBody(
-                        analyze_dependents=analyze_dependents,
-                        swift_only=revision.swift_only,
-                    ),
+                lambda: (
+                    self._ctx.binaries_api.finish_and_analyze_current_revision(
+                        binary_id=binary_id,
+                        finish_and_analyze_current_revision_body=FinishAndAnalyzeCurrentRevisionBody(
+                            analyze_dependents=analyze_dependents,
+                            swift_only=revision.swift_only,
+                            perform_global_analysis=revision.perform_global_analysis,
+                        ),
+                    )
                 ),
                 description=f"Finish revision {next_revision}",
                 max_retries=_MAX_RETRIES_FOR_REVISION_REQUEST,

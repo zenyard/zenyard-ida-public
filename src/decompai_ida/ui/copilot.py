@@ -14,7 +14,7 @@ from textwrap import dedent
 
 from decompai_ida import assets
 from decompai_ida.ida_tasks import AsyncCallback
-from decompai_ida.model import Message
+from decompai_ida.model import Message, Task
 
 if ty.TYPE_CHECKING:
     from decompai_ida.model import CopilotModel
@@ -71,6 +71,7 @@ class CopilotStyles:
 @dataclass
 class ChatState:
     messages: ty.List[Message]
+    tasks: ty.List[Task]
     in_progress: bool
 
 
@@ -82,6 +83,7 @@ class CopilotViewModel(QtCore.QObject):
 
     # Qt signals for UI updates
     messages_changed = Signal(list)  # list[Message]
+    tasks_changed = Signal(list)  # list[Task]
     copilot_active_changed = Signal(bool)
 
     def __init__(self, copilot_model: "CopilotModel", parent=None):
@@ -91,6 +93,10 @@ class CopilotViewModel(QtCore.QObject):
     def get_messages(self) -> ty.List[Message]:
         """Get current messages."""
         return self._copilot_model.messages.copy()
+
+    def get_tasks(self) -> ty.List[Task]:
+        """Get current tasks."""
+        return self._copilot_model.tasks.copy()
 
     def is_copilot_active(self) -> bool:
         """Check if copilot is currently processing."""
@@ -115,6 +121,7 @@ class CopilotViewModel(QtCore.QObject):
     def update_from_model(self) -> None:
         """Update UI signals based on current model state."""
         self.messages_changed.emit(self._copilot_model.messages)
+        self.tasks_changed.emit(self._copilot_model.tasks)
         self.copilot_active_changed.emit(self.is_copilot_active())
 
 
@@ -166,11 +173,11 @@ class ChatDisplay(QtWidgets.QTextEdit):
         except Exception as e:
             logger.debug(f"Failed to navigate to symbol {symbol}: {e}")
 
-    def set_messages(self, messages: ty.List[Message]):
-        """Update the chat display with new messages."""
+    def set_state(self, state: ChatState):
+        """Update the chat display with new messages and tasks."""
         try:
             html_parts = []
-            for message in messages:
+            for i, message in enumerate(state.messages):
                 # Render message with sender and text
                 html_parts.append(
                     CopilotStyles.MESSAGE_HTML_TEMPLATE.format(
@@ -180,6 +187,13 @@ class ChatDisplay(QtWidgets.QTextEdit):
                         text=html.escape(message.text),
                     )
                 )
+
+                # Render task list after the last AI message while in progress
+                is_last_ai = (
+                    message.sender == "AI" and i == len(state.messages) - 1
+                )
+                if is_last_ai and state.in_progress and state.tasks:
+                    html_parts.append(_render_tasks(state.tasks))
 
                 # Append tool usage info if present
                 if message.tool_count is not None and message.tool_count > 0:
@@ -232,6 +246,20 @@ def _get_message_sender(message: Message) -> str:
         case _:
             _: tye.Never = message.sender
             return "Unknown"
+
+
+def _render_tasks(tasks: ty.List[Task]) -> str:
+    lines = ["### Tasks\n"]
+    for task in tasks:
+        escaped = html.escape(task.content)
+        match task.status:
+            case "completed":
+                lines.append(f"- [x] {escaped}")
+            case "in_progress":
+                lines.append(f"- [ ] **{escaped}**")
+            case "pending":
+                lines.append(f"- [ ] {escaped}")
+    return "\n".join(lines) + "\n"
 
 
 class UserTextInput(QtWidgets.QTextEdit):
@@ -538,7 +566,7 @@ class CopilotChat(QtWidgets.QWidget):
     def set_state(self, state: ChatState):
         """Update the chat state with new messages and progress status."""
         try:
-            self.chat_display.set_messages(state.messages)
+            self.chat_display.set_state(state)
             self.input_field.set_in_progress(state.in_progress)
         except Exception as e:
             logger.error(f"Error setting chat state: {e}")
@@ -563,21 +591,36 @@ class CopilotViewModelReceiver(QObject):
     def _update_messages(self, messages: ty.List[Message]):
         """Update the chat display with new messages."""
         try:
-            chat_state = ChatState(messages=messages, in_progress=False)
+            chat_state = ChatState(
+                messages=messages,
+                tasks=self._view_model.get_tasks(),
+                in_progress=self._view_model.is_copilot_active(),
+            )
             self._copilot_chat.set_state(chat_state)
         except Exception as e:
             logger.error(f"Error updating messages: {e}")
+
+    @Slot(list)
+    def _update_tasks(self, tasks: ty.List[Task]):
+        """Update the chat display with new tasks."""
+        try:
+            chat_state = ChatState(
+                messages=self._view_model.get_messages(),
+                tasks=tasks,
+                in_progress=self._view_model.is_copilot_active(),
+            )
+            self._copilot_chat.set_state(chat_state)
+        except Exception as e:
+            logger.error(f"Error updating tasks: {e}")
 
     @Slot(bool)
     def _update_active_state(self, is_active: bool):
         """Update the UI based on copilot active state."""
         try:
-            # Update the in_progress state which controls UI disable/enable
-            current_messages = (
-                self._view_model.get_messages() if self._view_model else []
-            )
             chat_state = ChatState(
-                messages=current_messages, in_progress=is_active
+                messages=self._view_model.get_messages(),
+                tasks=self._view_model.get_tasks(),
+                in_progress=is_active,
             )
             self._copilot_chat.set_state(chat_state)
         except Exception as e:
@@ -670,6 +713,9 @@ class CopilotWindow(ida_kernwin.PluginForm):
             # Connect view model signals to UI updates
             self._view_model.messages_changed.connect(
                 self._view_model_receiver._update_messages
+            )
+            self._view_model.tasks_changed.connect(
+                self._view_model_receiver._update_tasks
             )
             self._view_model.copilot_active_changed.connect(
                 self._view_model_receiver._update_active_state
