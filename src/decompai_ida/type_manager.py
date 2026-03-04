@@ -634,8 +634,30 @@ def reconcile_type_library_sync(*, model: "Model") -> None:
                 model=model,
             )
 
+    # Re-register already-registered structs whose dependencies were just added
+    # or renamed. These structs may have stale field type names in IDA (e.g. a
+    # forward-declared "RefTarget" that was never resolved, now replaced by
+    # "RefTarget_inner_aa"). Must run after to_add so the new names exist in IDA.
+    changed_deps = to_add | to_reregister
+    stale_dependents = set[str]()
+    for struct_id in (required & registered) - to_reregister:
+        deps = dependencies.get(struct_id, [])
+        if any(dep_id in changed_deps for dep_id in deps):
+            stale_dependents.add(struct_id)
+    if stale_dependents:
+        for struct_id in _topological_sort(stale_dependents, dependencies):
+            old_effective = model.registered_struct_names.get_sync(struct_id)
+            if old_effective:
+                _reregister_struct_in_ida_sync(
+                    struct_id,
+                    old_effective,
+                    effective_names,
+                    definitions,
+                    model=model,
+                )
+
     # Apply types for all functions using structs that were added or re-registered.
-    structs_needing_type_application = to_add | to_reregister
+    structs_needing_type_application = to_add | to_reregister | stale_dependents
     if structs_needing_type_application:
         applied_struct_ids = set[str]()
         for address in model.function_struct_usage.keys_sync():
