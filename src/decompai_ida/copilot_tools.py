@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import re
 import typing as ty
 
+import ida_bytes
 import ida_funcs
 import ida_hexrays
 import ida_kernwin
@@ -270,6 +271,14 @@ def set_function_prototypes_sync(
         operation=set_one_prototype,
         operation_name="set prototype",
     )
+
+
+def get_bytes_sync(address: str, size: int) -> str:
+    ea = int(address, 16)
+    data = ida_bytes.get_bytes(ea, size)
+    if data is None:
+        raise Exception(f"Failed to read {size} bytes at {address}")
+    return data.hex(" ")
 
 
 def get_local_types_sync(
@@ -573,6 +582,14 @@ async def get_copilot_tools(model: Model):
             search_function_comments_sync, model, regex, cursor
         )
 
+    @tool()
+    async def get_bytes(
+        address: ty.Annotated[str, "Start address in hex string"],
+        size: ty.Annotated[int, "Number of bytes to read"],
+    ) -> str:
+        """Read raw bytes from IDA database at the given address. Returns bytes as a hex string."""
+        return await ida_tasks.run(get_bytes_sync, address, size)
+
     common_tools = [
         get_current_function,
         decompile_function,
@@ -585,6 +602,7 @@ async def get_copilot_tools(model: Model):
         get_function_comment,
         get_local_types,
         search_function_comments,
+        get_bytes,
     ]
 
     modification_tools = [

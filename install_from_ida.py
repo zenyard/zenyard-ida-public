@@ -1,3 +1,4 @@
+import base64
 from dataclasses import dataclass
 import json
 import re
@@ -16,7 +17,11 @@ import ida_kernwin
 
 API_URL = globals().get("ZENYARD_API_URL", "https://api.zenyard.ai")
 REPOSITORY = globals().get("ZENYARD_REPOSITORY", "zenyard/zenyard-ida-public")
-INSTALL_LOCATION = f"git+https://github.com/{REPOSITORY}.git"
+GIT_TOKEN: ty.Optional[str] = globals().get("ZENYARD_GIT_TOKEN")
+if GIT_TOKEN is not None:
+    INSTALL_LOCATION = f"git+https://{GIT_TOKEN}@github.com/{REPOSITORY}.git"
+else:
+    INSTALL_LOCATION = f"git+https://github.com/{REPOSITORY}.git"
 STUB_FILE_URL = (
     f"https://raw.githubusercontent.com/{REPOSITORY}/main/decompai_stub.py"
 )
@@ -69,7 +74,7 @@ def main():
         install_or_upgrade_package(INSTALL_LOCATION, target=packages_path)
 
         print("[+] Installing plugin stub file")
-        install_stub_file()
+        install_stub_file(GIT_TOKEN)
 
         if not config_exists:
             print("[+] Installing API key")
@@ -255,10 +260,15 @@ def python_executable() -> Path:
     return existing
 
 
-def install_stub_file():
+def install_stub_file(git_token: ty.Optional[str]):
     stub_path.parent.mkdir(parents=True, exist_ok=True)
 
     req = Request(STUB_FILE_URL)
+    if git_token is not None:
+        req.add_header(
+            "Authorization",
+            f"Basic {base64.b64encode(git_token.encode('utf-8')).decode('utf-8')}",
+        )
     with (
         urlopen(req) as remote_input,
         stub_path.open("wb") as local_output,

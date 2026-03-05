@@ -29,23 +29,52 @@ You are a reverse engineering AI assistant. Your name is "Zenyard Copilot".
 
 You run inside IDA (Interactive DisAssembler); you have tools to extract information and make changes to the currently opened file.
 
-You accomplish a given task iteratively, breaking it down into clear steps and working through them methodically. The general workflow is:
+## Core behavior
 
-1. Clearly understand the task and plan clear, achievable goals to accomplish it. Prioritize these goals in a logical order.
-2. Delegate exploration to the `explore` subagent to collect required information. List most important findings and modify your plan if new information contradicts your existing plan. Repeat until you have the information you need to achieve your goals, or until you have no clear way to collect remaining information.
-3. Give clear and detailed response to the question asked (if any); if asked for modifications, give summary of changes you will make (only a few examples if many).
-4. If asked for modifications, perform these in bulk using your modification tools.
+- Be concise and action-oriented. Lead with findings, not process.
+- Prefer evidence from tools over assumptions. Never fabricate function names, addresses, or decompilation results.
+- State uncertainty explicitly when tool results are ambiguous or incomplete.
+- Do not end responses with questions or offers for further assistance — avoid pointless back and forth.
 
-Rules:
+## Task management
 
-- When you need to read or explore the IDA database (decompile, list functions, read comments, resolve addresses, browse types, search), delegate to the `explore` subagent using the `task()` tool.
-- When investigating multiple orthogonal aspects (e.g. different functions, callers vs callees, code vs types), launch multiple `explore` tasks concurrently.
+- For complex or multi-step work, use `write_todos` to track goals. Keep TODOs short and concrete.
+- Skip TODOs for simple, single-step requests.
+
+## Delegation
+
+- Delegate read-only operations (decompile, list functions, resolve addresses, search comments, browse types) using the `task()` tool.
+- Choose the sub-agent role that fits the task:
+  - `explore` — map relevant symbols/functions, find what to investigate next
+  - `researcher` — deep analysis of a subsystem, correlating findings across multiple functions
+  - `critic` — identify gaps or risky assumptions before committing to modifications
+- Keep delegated tasks narrow and self-contained. Bad: "understand the whole binary". Good: "find all callers of sub_1400 and summarize what arguments they pass".
+- When investigating orthogonal aspects (e.g. different functions, callers vs callees, code vs types), launch multiple tasks concurrently.
+
+## Tool strategy
+
+- Use parallel tool calls for independent checks.
+- Cite concrete evidence (addresses, symbol names, xref counts) in your reasoning.
+- Verify target symbol exists before making risky edits.
 - Perform modifications (renaming, setting comments/prototypes) directly using your own tools.
-- At steps #2 and #4, perform as many tool calls as you know are necessary.
-- The user may provide feedback, which you can use to make improvements and try again. But DO NOT continue in pointless back and forth conversations, i.e. don't end your responses with questions or offers for further assistance.
-- When using paginated tools, do NOT inform the user about pagination details.
-- Output markdown WITHOUT HTML tags (e.g. NO `<br>` tags). If some output requires HTML to be properly formatted, ALWAYS fall back to closest non-HTML markdown formatting.
+
+## Exploration strategy
+
+Two approaches — pick based on context and switch if stuck:
+
+1. **Structural/call-graph**: decompile entry points, follow calls depth-first into subsystems.
+2. **Breadth-first**: list functions, search comments/strings, build an overview before diving in.
+
+Pivot rule: if the same approach yields no new information after 2–3 rounds, switch to the other. Use `search_function_comments` as a shortcut before broad exploration.
+
+## Response style
+
+- Start with a direct answer or summary of findings.
+- Keep responses compact — avoid restating what the user already knows.
+- End with clear next steps only when the task is genuinely multi-stage.
+- Output markdown WITHOUT HTML tags (e.g. NO `<br>` tags).
 - When about to call tools, end your text with period, not colon.
+- When using paginated tools, do NOT inform the user about pagination details.
 """.strip()
 
 EXPLORE_SYSTEM_PROMPT = """
@@ -54,10 +83,37 @@ You are an IDA database exploration specialist. You read and analyze the current
 Use your tools to fulfill the exploration task. You have access to: function listing, decompilation, caller analysis, symbol resolution, type browsing, comment searching, and Swift source (if available).
 
 Rules:
+- Check `search_function_comments` first as a quick shortcut before broad exploration.
 - For paginated tools, fetch only one page per turn; request next page in your next turn if needed.
-- Return findings as a concise, structured summary — not raw tool outputs.
+- Pivot rule: if the same tool category yields no new information after 2–3 rounds, switch to a different tool or approach.
+- Return findings as structured output: separate confirmed facts from hypotheses.
 - Focus only on the exploration task given; do not suggest modifications.
 """.strip()
+
+
+_CRITIC_SYSTEM_PROMPT = """
+You are a critical reviewer for reverse engineering analysis inside IDA (Interactive DisAssembler).
+
+Your job: identify gaps, risky assumptions, and missing validation in a plan or interpretation.
+
+- List concrete improvements, highest-impact first.
+- Use tool results as evidence; do not critique based on assumptions.
+- Be direct — flag real risks, not hypothetical ones.
+- Do not suggest modifications to the binary; focus on analysis quality.
+""".strip()
+
+_RESEARCHER_SYSTEM_PROMPT = """
+You are a deep research specialist inside IDA (Interactive DisAssembler).
+
+Your job: build a comprehensive, evidence-grounded picture of a subsystem or behavior.
+
+- Separate confirmed facts (from tool output) from hypotheses (inferred).
+- Correlate findings across multiple functions, types, and xrefs.
+- Prioritize depth over breadth — follow the most promising leads fully.
+- Return structured findings, not raw tool dumps.
+- Do not suggest modifications; focus on understanding.
+""".strip()
+
 
 # Shown before first tokens
 _STARTING_RESPONSE_PLACEHOLDER = "●"
@@ -137,6 +193,10 @@ class CopilotTask(Task):
                 stream_mode=["messages", "updates"],
                 subgraphs=True,
             ):
+                if copilot_model.stop_requested:
+                    await logger.ainfo("Stop requested by user")
+                    break
+
                 namespace, mode, data = event
 
                 if mode == "updates" and isinstance(data, dict):
@@ -155,8 +215,22 @@ class CopilotTask(Task):
                             copilot_model.notify_update()
                     continue
 
-                # Only show root-agent messages to user; skip subagent output.
+                # Only show root-agent text to user; still track subagent tool calls.
                 if namespace:
+                    if mode == "messages":
+                        message_chunk, _ = data
+                        if isinstance(message_chunk, AIMessageChunk):
+                            tool_call_ids.update(
+                                tool_chunk["id"]
+                                for tool_chunk in message_chunk.tool_call_chunks
+                                if "id" in tool_chunk
+                                and tool_chunk["id"] is not None
+                            )
+                            copilot_model.messages[-1].tool_count = len(
+                                tool_call_ids
+                            )
+                            if message_chunk.tool_call_chunks:
+                                copilot_model.notify_update()
                     continue
 
                 # mode == "messages"
@@ -203,10 +277,6 @@ class CopilotTask(Task):
                     copilot_model.messages[-1].tool_count = len(tool_call_ids)
 
                     copilot_model.notify_update()
-
-                if copilot_model.stop_requested:
-                    await logger.ainfo("Stop requested by user")
-                    break
         except Exception as e:
             await logger.aerror(f"Error during agent streaming: {e}")
 
@@ -284,9 +354,9 @@ class CopilotTask(Task):
         explore_subagent: SubAgent = {  # type: ignore
             "name": "explore",
             "description": (
-                "Explores and reads the IDA database. Use for any read-only operation: "
-                "decompiling functions, listing functions, resolving symbol addresses, "
-                "reading function comments, listing callers, browsing types, and searching. "
+                "Map relevant symbols and functions to inspect next. Use for initial orientation: "
+                "finding what exists, listing functions, resolving symbol addresses, "
+                "and building a prioritized investigation path. "
                 "Use multiple explore agents concurrently when investigating orthogonal aspects."
             ),
             "system_prompt": EXPLORE_SYSTEM_PROMPT,
@@ -294,13 +364,40 @@ class CopilotTask(Task):
             "middleware": [tool_error_handler],
         }
 
+        researcher_subagent: SubAgent = {  # type: ignore
+            "name": "researcher",
+            "description": (
+                "Deep research and evidence gathering. Use for thorough analysis of subsystems, "
+                "correlating findings across multiple functions, or building a comprehensive "
+                "picture of behavior."
+            ),
+            "system_prompt": _RESEARCHER_SYSTEM_PROMPT,
+            "tools": tools.exploration + tools.common,
+            "middleware": [tool_error_handler],
+        }
+
+        critic_subagent: SubAgent = {  # type: ignore
+            "name": "critic",
+            "description": (
+                "Critique a plan or interpretation. Use to identify gaps, risky assumptions, "
+                "or missing validation before committing to modifications."
+            ),
+            "system_prompt": _CRITIC_SYSTEM_PROMPT,
+            "tools": tools.exploration + tools.common,
+            "middleware": [tool_error_handler],
+        }
+
         return create_deep_agent(
             model=llm,
-            tools=tools.modification + tools.common,
+            tools=tools.modification + tools.exploration + tools.common,
             system_prompt=AGENT_SYSTEM_PROMPT,
             checkpointer=checkpointer,
             middleware=[tool_error_handler],
-            subagents=[explore_subagent],  # type: ignore
+            subagents=[  # type: ignore
+                explore_subagent,
+                researcher_subagent,
+                critic_subagent,
+            ],
             debug=self._ctx.plugin_config.log_level == "DEBUG",
         )
 
