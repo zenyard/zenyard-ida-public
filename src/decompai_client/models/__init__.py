@@ -37,8 +37,10 @@ from decompai_client.models.copilot_open_event import CopilotOpenEvent
 from decompai_client.models.copilot_stop_requested_event import CopilotStopRequestedEvent
 from decompai_client.models.create_revision_params import CreateRevisionParams
 from decompai_client.models.database_opened_event import DatabaseOpenedEvent
+from decompai_client.models.decompiler import Decompiler
 from decompai_client.models.decompiler_enum import DecompilerEnum
 from decompai_client.models.decompiler_note import DecompilerNote
+from decompai_client.models.decompiler_type import DecompilerType
 from decompai_client.models.event import Event
 from decompai_client.models.expired_usage import ExpiredUsage
 from decompai_client.models.extra_details import ExtraDetails

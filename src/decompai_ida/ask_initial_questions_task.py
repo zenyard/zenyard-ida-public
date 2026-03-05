@@ -5,9 +5,10 @@ from inspect import cleandoc
 import ida_kernwin
 import typing_extensions as tye
 
-from decompai_ida import logger
+from decompai_ida import binary, ida_tasks, logger
 from decompai_ida.preprocessing_task import PreprocessingTask
 from decompai_ida.queue_revisions_task import QueueRevisionsTask
+from decompai_ida.register_binary_task import BinaryExceedsSizeLimitError
 from decompai_ida.tasks import ForegroundTask, Task
 
 _FORM_DEFINITION = cleandoc("""
@@ -89,12 +90,15 @@ class AskInitialQuestions(Task):
     """
 
     async def _run(self):
+        await self._verify_binary_allowed()
+
         is_paused = await self._ctx.model.wait_for_paused_state()
         if is_paused:
             return
 
         already_asked = await self._ctx.model.asked_initial_questions.get()
         already_uploaded = await self._ctx.model.initial_upload_complete.get()
+
         if already_asked or already_uploaded:
             await logger.get().adebug(
                 "Skipping initial questions",
@@ -110,6 +114,15 @@ class AskInitialQuestions(Task):
         self._ctx.model.runtime_status.queue_foreground_task_if_not_already_queued(
             ShowInitialQuestionsTask()
         )
+
+    async def _verify_binary_allowed(self) -> None:
+        user_config = await self._ctx.model.wait_for_user_config()
+        assert user_config.max_binary_size_mb is not None
+        binary_bytes = await ida_tasks.run(binary.get_size_sync)
+        if binary_bytes > user_config.max_binary_size_mb * 2**20:
+            raise BinaryExceedsSizeLimitError(
+                max_binary_size_mb=user_config.max_binary_size_mb
+            )
 
 
 def _show_form_sync() -> _FormResult:

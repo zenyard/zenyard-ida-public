@@ -1,6 +1,12 @@
 import ida_nalt
 
-from decompai_client import BinaryDetails, OriginalLanguages, PostBinaryBody
+from decompai_client import (
+    BinaryDetails,
+    OriginalLanguages,
+    PostBinaryBody,
+    Decompiler,
+)
+from decompai_client.models.decompiler_type import DecompilerType
 from decompai_ida import binary, ida_tasks, logger
 from decompai_ida.tasks import CriticalTaskError, Task
 
@@ -40,7 +46,6 @@ class RegisterBinaryTask(Task):
         await self._ctx.model.wait_for_initial_questions()
 
         await logger.adebug("Registering binary")
-        await self._verify_binary_allowed()
 
         binary_path = await ida_tasks.run(binary.get_binary_path_sync)
         binary_instructions = await self._ctx.model.binary_instructions.get()
@@ -66,6 +71,7 @@ class RegisterBinaryTask(Task):
                 platform=platform,
                 os_version=os_version,
                 input_file_sha256=input_file_sha256.hex(),
+                decompiler=Decompiler(type=DecompilerType.IDA),
             ),
         )
 
@@ -79,12 +85,3 @@ class RegisterBinaryTask(Task):
         )
         await self._ctx.model.binary_id.set(result.binary_id)
         self._ctx.model.notify_update()
-
-    async def _verify_binary_allowed(self) -> None:
-        user_config = await self._ctx.model.wait_for_user_config()
-        assert user_config.max_binary_size_mb is not None
-        binary_bytes = await ida_tasks.run(binary.get_size_sync)
-        if binary_bytes > user_config.max_binary_size_mb * 2**20:
-            raise BinaryExceedsSizeLimitError(
-                max_binary_size_mb=user_config.max_binary_size_mb
-            )

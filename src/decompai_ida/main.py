@@ -303,6 +303,8 @@ async def _spawn_tasks(global_context: GlobalTaskContext):
                 )
 
                 if handled is not None:
+                    model.runtime_status.disabled = True
+                    model.notify_update()
                     if _extract_exception(handled, ForbiddenException):
                         await messages.warn_no_permission_for_binary()
                     if _extract_exception(handled, UnauthorizedException):
@@ -318,8 +320,6 @@ async def _spawn_tasks(global_context: GlobalTaskContext):
                     raise rest
 
                 # Just continue in disabled state.
-                model.runtime_status.disabled = True
-                model.notify_update()
 
 
 async def _spawn_active_tasks(task_context: TaskContext):

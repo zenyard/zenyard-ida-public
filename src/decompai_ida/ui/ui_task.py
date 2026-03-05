@@ -65,6 +65,9 @@ class UiTask(Task):
                 )
 
     async def _on_upload_clicked(self):
+        if self._ctx.model.runtime_status.disabled:
+            return
+
         await logger.get().ainfo("Upload requested")
         if await self._ctx.model.asked_initial_questions.get():
             self._ctx.model.runtime_status.queue_foreground_task_if_not_already_queued(
