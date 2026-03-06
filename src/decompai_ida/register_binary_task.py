@@ -1,3 +1,4 @@
+import ida_kernwin
 import ida_nalt
 
 from decompai_client import (
@@ -71,7 +72,10 @@ class RegisterBinaryTask(Task):
                 platform=platform,
                 os_version=os_version,
                 input_file_sha256=input_file_sha256.hex(),
-                decompiler=Decompiler(type=DecompilerType.IDA),
+                decompiler=Decompiler(
+                    type=DecompilerType.IDA,
+                    version=await ida_tasks.run(ida_kernwin.get_kernel_version),
+                ),
             ),
         )
 
