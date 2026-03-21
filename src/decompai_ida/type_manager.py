@@ -8,21 +8,21 @@ type library.
 
 import re
 import typing as ty
+from inspect import cleandoc
 
+import ida_dirtree
 import ida_typeinf
 
 from decompai_client import StructDefinition
-from decompai_ida import logger
+from decompai_ida import ida_tasks, logger
 from decompai_ida.struct_generator import (
     generate_struct_declaration_with_renames,
 )
-from decompai_ida.lvars import (
-    apply_parameter_type_sync,
-    apply_return_type_sync,
-)
+from decompai_ida.lvars import apply_func_types_batch_sync
 
 if ty.TYPE_CHECKING:
     from decompai_ida.model import Model
+    from decompai_ida.wait_box import WaitBox
 
 # Key used in function_struct_usage dict for return type
 _RETURN_KEY = "return"
@@ -30,16 +30,30 @@ _RETURN_KEY = "return"
 # Pattern for substituting struct names in type strings (word boundary matching)
 _STRUCT_NAME_PATTERN = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\b")
 
+_ZENYARD_DIR = "Zenyard"
+
+_RECONCILE_WAITBOX_TEXT = cleandoc("""
+    Zenyard is updating type definitions — almost done
+""")
+
+_APPLY_TYPES_WAITBOX_TEXT = cleandoc("""
+    Zenyard is applying updated type definitions — almost done
+""")
+
 
 def _compute_effective_names(
     required_struct_ids: set[str],
     definitions: dict[str, StructDefinition],
+    *,
+    taken_names: set[str],
 ) -> dict[str, str]:
     """
     Compute effective names for structs, adding suffix for collisions.
 
-    When multiple required structs have the same name, each gets a suffix
-    from its struct_id to make the name unique.
+    Handles two kinds of collisions:
+    - Multiple required structs share the same name: all get a struct_id suffix.
+    - A struct's name is already taken in IDA by a user-created type
+      (passed via taken_names): that struct gets a struct_id suffix.
 
     Returns: mapping of struct_id -> effective_name
     """
@@ -53,7 +67,7 @@ def _compute_effective_names(
     # Compute effective names
     effective_names = dict[str, str]()
     for name, ids in name_to_ids.items():
-        if len(ids) == 1:
+        if len(ids) == 1 and name not in taken_names:
             # No collision
             effective_names[ids[0]] = name
         else:
@@ -241,6 +255,21 @@ def _topological_sort(
     return result
 
 
+def _move_struct_to_zenyard_dir_sync(effective_name: str) -> None:
+    dirtree = ida_dirtree.get_std_dirtree(ida_dirtree.DIRTREE_LOCAL_TYPES)  # type: ignore[attr-defined]
+    err = dirtree.mkdir(_ZENYARD_DIR)
+    if err not in (ida_dirtree.DTE_OK, ida_dirtree.DTE_ALREADY_EXISTS):  # type: ignore[attr-defined]
+        logger.warning("Failed to create Zenyard dir in local types", error=err)
+        return
+    err = dirtree.rename(effective_name, f"{_ZENYARD_DIR}/{effective_name}")
+    if err != ida_dirtree.DTE_OK:  # type: ignore[attr-defined]
+        logger.warning(
+            "Failed to move struct to Zenyard dir",
+            effective_name=effective_name,
+            error=err,
+        )
+
+
 def _add_struct_to_ida_sync(
     struct_id: str,
     effective_names: dict[str, str],
@@ -293,6 +322,7 @@ def _add_struct_to_ida_sync(
             return False
 
         new_tinfo.set_named_type(None, effective_name)  # type: ignore
+        _move_struct_to_zenyard_dir_sync(effective_name)
 
         # Track what effective_name was used for this struct
         model.registered_struct_names.set_sync(struct_id, effective_name)
@@ -475,91 +505,88 @@ def set_original_type_annotation_sync(
     model.function_original_type_annotations.set_sync(address, annotations)
 
 
-def get_functions_using_struct_sync(
-    struct_id: str,
+def _apply_types_batched_sync(
+    struct_ids: set[str],
     *,
+    definitions: dict[str, StructDefinition],
     model: "Model",
-) -> list[tuple[int, str]]:
-    """
-    Get all (address, key) pairs where the function uses the given struct.
-
-    Returns a list of (address, key) tuples where key is a parameter index
-    string or "return".
-    """
-    result = list[tuple[int, str]]()
-    for address in model.function_struct_usage.keys_sync():
-        usage = model.function_struct_usage.get_sync(address)
-        if usage:
-            for key, sid in usage.items():
-                if sid == struct_id:
-                    result.append((address, key))
-    return result
-
-
-def apply_types_for_struct_sync(
-    struct_id: str,
-    *,
-    model: "Model",
+    wait_box: "WaitBox",
 ) -> None:
     """
-    Apply all types referencing the struct (for new or renamed structs).
-
-    Called when a struct is newly registered or when its effective name changes
-    due to collision resolution. Finds all functions using this struct via
-    function_struct_usage and applies the stored original type annotations
-    with the correct effective name.
-
-    Args:
-        struct_id: The struct_id as stored in function_struct_usage.
+    Apply type annotations for all functions using the given structs, batched
+    by address so each function gets a single apply_tinfo call.
     """
-    struct_def = model.struct_definitions.get_sync(struct_id)
-    if not struct_def:
-        return
+    # Build name substitutions for all structs.
+    name_subs = dict[str, dict[str, str]]()
+    for struct_id in struct_ids:
+        struct_def = definitions.get(struct_id)
+        effective_name = model.registered_struct_names.get_sync(struct_id)
+        if not struct_def or not effective_name:
+            continue
+        if struct_def.name != effective_name:
+            name_subs[struct_id] = {struct_def.name: effective_name}
+        else:
+            name_subs[struct_id] = {}
 
-    effective_name = model.registered_struct_names.get_sync(struct_id)
-    if not effective_name:
-        return
-
-    # Substitute original struct's name with effective name if different
-    original_name = struct_def.name
-    name_sub = (
-        {original_name: effective_name}
-        if original_name != effective_name
-        else {}
-    )
-
-    for address, key in get_functions_using_struct_sync(struct_id, model=model):
+    # Collect all type changes grouped by address.
+    # Key: address, Value: dict of key -> (struct_id, annotation)
+    pending = dict[int, dict[str, tuple[str, str]]]()
+    for address in model.function_struct_usage.keys_sync():
+        usage = model.function_struct_usage.get_sync(address)
+        if not usage:
+            continue
         annotations = (
             model.function_original_type_annotations.get_sync(address) or {}
         )
-        original_annotation = annotations.get(key)
-        if not original_annotation:
-            continue
+        for key, struct_id in usage.items():
+            if struct_id not in struct_ids:
+                continue
+            if struct_id not in name_subs:
+                continue
+            original_annotation = annotations.get(key)
+            if not original_annotation:
+                continue
+            new_annotation = _substitute_struct_names(
+                original_annotation, name_subs[struct_id]
+            )
+            pending.setdefault(address, {})[key] = (struct_id, new_annotation)
 
-        new_annotation = _substitute_struct_names(original_annotation, name_sub)
+    # Apply batched per address.
+    if not pending:
+        return
+    wait_box.start_new_task(_APPLY_TYPES_WAITBOX_TEXT, items=len(pending))
+    for address, changes in pending.items():
+        parameter_types = dict[int, str]()
+        return_type: ty.Optional[str] = None
+        for key, (struct_id, annotation) in changes.items():
+            if key == _RETURN_KEY:
+                return_type = annotation
+            else:
+                parameter_types[int(key)] = annotation
 
         try:
-            if key == _RETURN_KEY:
-                apply_return_type_sync(address, new_annotation)
-            else:
-                apply_parameter_type_sync(address, int(key), new_annotation)
+            apply_func_types_batch_sync(
+                address,
+                parameter_types=parameter_types,
+                return_type=return_type,
+            )
             logger.debug(
-                "Applied type for struct",
-                struct_id=struct_id,
+                "Applied types for function",
                 address=address,
-                key=key,
-                annotation=new_annotation,
+                parameter_types=parameter_types,
+                return_type=return_type,
             )
         except Exception as ex:
             logger.warning(
-                "Error applying type for struct",
-                struct_id=struct_id,
+                "Error applying types for function",
                 address=address,
                 exc_info=ex,
             )
+        wait_box.mark_items_complete(1)
+        ida_tasks.execute_queued_tasks_sync()
 
 
-def reconcile_type_library_sync(*, model: "Model") -> None:
+def reconcile_type_library_sync(*, model: "Model", wait_box: "WaitBox") -> None:
     """
     Compute required structs and sync IDA's type library.
 
@@ -584,8 +611,24 @@ def reconcile_type_library_sync(*, model: "Model") -> None:
         for sid in needed_ids
     }
 
-    # Compute effective names for all required structs
-    effective_names = _compute_effective_names(required, definitions)
+    # Compute effective names for all required structs, resolving collisions
+    # with both other plugin structs and user-created types in IDA.
+    our_registered_names = {
+        name
+        for sid in registered
+        if (name := model.registered_struct_names.get_sync(sid)) is not None
+    }
+    til = ida_typeinf.get_idati()
+    taken_names = {
+        struct_def.name
+        for sid in required
+        if (struct_def := definitions.get(sid)) is not None
+        and ida_typeinf.get_type_ordinal(til, struct_def.name) != 0
+        and struct_def.name not in our_registered_names
+    }
+    effective_names = _compute_effective_names(
+        required, definitions, taken_names=taken_names
+    )
 
     # Determine what needs to change
     to_add = required - registered
@@ -602,6 +645,27 @@ def reconcile_type_library_sync(*, model: "Model") -> None:
     if not to_add and not to_remove and not to_reregister:
         return
 
+    # Pre-compute stale dependents before the loops so we can include them in
+    # the total item count for progress tracking.
+    changed_deps = to_add | to_reregister
+    stale_dependents = set[str]()
+    for struct_id in (required & registered) - to_reregister:
+        deps = dependencies.get(struct_id, [])
+        if any(dep_id in changed_deps for dep_id in deps):
+            stale_dependents.add(struct_id)
+
+    total = (
+        len(to_remove)
+        + len(to_reregister)
+        + len(to_add)
+        + len(stale_dependents)
+    )
+    wait_box.start_new_task(_RECONCILE_WAITBOX_TEXT, items=total)
+
+    def _tick():
+        wait_box.mark_items_complete(1)
+        ida_tasks.execute_queued_tasks_sync()
+
     # Remove unused structs in reverse order (dependents first)
     if to_remove:
         for struct_id in reversed(_topological_sort(to_remove, dependencies)):
@@ -610,6 +674,7 @@ def reconcile_type_library_sync(*, model: "Model") -> None:
                 _remove_struct_from_ida_sync(
                     struct_id, old_effective, model=model
                 )
+            _tick()
 
     # Re-register structs whose effective name changed (in place, preserving ordinal)
     if to_reregister:
@@ -623,6 +688,7 @@ def reconcile_type_library_sync(*, model: "Model") -> None:
                     definitions,
                     model=model,
                 )
+            _tick()
 
     # Add new structs in dependency order (dependencies first)
     if to_add:
@@ -633,17 +699,12 @@ def reconcile_type_library_sync(*, model: "Model") -> None:
                 definitions,
                 model=model,
             )
+            _tick()
 
     # Re-register already-registered structs whose dependencies were just added
     # or renamed. These structs may have stale field type names in IDA (e.g. a
     # forward-declared "RefTarget" that was never resolved, now replaced by
     # "RefTarget_inner_aa"). Must run after to_add so the new names exist in IDA.
-    changed_deps = to_add | to_reregister
-    stale_dependents = set[str]()
-    for struct_id in (required & registered) - to_reregister:
-        deps = dependencies.get(struct_id, [])
-        if any(dep_id in changed_deps for dep_id in deps):
-            stale_dependents.add(struct_id)
     if stale_dependents:
         for struct_id in _topological_sort(stale_dependents, dependencies):
             old_effective = model.registered_struct_names.get_sync(struct_id)
@@ -655,21 +716,18 @@ def reconcile_type_library_sync(*, model: "Model") -> None:
                     definitions,
                     model=model,
                 )
+            _tick()
 
     # Apply types for all functions using structs that were added or re-registered.
+    # Batch all type changes per function into a single apply_tinfo call.
     structs_needing_type_application = to_add | to_reregister | stale_dependents
     if structs_needing_type_application:
-        applied_struct_ids = set[str]()
-        for address in model.function_struct_usage.keys_sync():
-            usage = model.function_struct_usage.get_sync(address)
-            if not usage:
-                continue
-            for struct_id in usage.values():
-                if struct_id in applied_struct_ids:
-                    continue
-                if struct_id in structs_needing_type_application:
-                    apply_types_for_struct_sync(struct_id, model=model)
-                    applied_struct_ids.add(struct_id)
+        _apply_types_batched_sync(
+            structs_needing_type_application,
+            definitions=definitions,
+            model=model,
+            wait_box=wait_box,
+        )
 
     logger.debug(
         "Reconciled type library",

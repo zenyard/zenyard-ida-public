@@ -10,6 +10,8 @@ import ida_nalt
 import ida_typeinf
 import typing_extensions as tye
 
+from decompai_ida import logger
+
 
 @dataclass(frozen=True)
 class Name:
@@ -50,79 +52,101 @@ def apply_parameter_renames_sync(address: int, renames: ty.Mapping[int, str]):
         raise Exception(f"Error while saving new type for {address:016x}")
 
 
+def _parse_type_annotation(type_annotation: str) -> ida_typeinf.tinfo_t:
+    tinfo = ida_typeinf.tinfo_t()
+    if (
+        ida_typeinf.parse_decl(
+            tinfo,
+            None,  # type: ignore
+            f"{type_annotation};",
+            ida_typeinf.PT_SIL,
+        )
+        is None
+    ):
+        raise Exception(f"Failed to parse type annotation: {type_annotation}")
+    return tinfo
+
+
+def _apply_func_type_data(
+    address: int, func_type_data: ida_typeinf.func_type_data_t
+) -> None:
+    tinfo = ida_typeinf.tinfo_t()
+    # Setting to TINFO_DEFINITE so the decompiler doesn't override with guessed types
+    if not tinfo.create_func(func_type_data):
+        raise Exception(f"Error while creating new type for {address:016x}")
+    if not ida_typeinf.apply_tinfo(address, tinfo, ida_typeinf.TINFO_DEFINITE):
+        raise Exception(f"Error while saving new type for {address:016x}")
+
+
 def apply_parameter_type_sync(
     address: int,
     parameter_index: int,
     type_annotation: str,
 ):
     func_type_data = _get_func_type_data(address)
-
-    # Parse the type annotation into a tinfo_t
-    type_tinfo = ida_typeinf.tinfo_t()
-    parse_result = ida_typeinf.parse_decl(
-        type_tinfo,
-        None,  # type: ignore
-        f"{type_annotation} a;",
-        ida_typeinf.PT_SIL,
-    )
-    if parse_result is None:
-        raise Exception(f"Failed to parse type annotation: {type_annotation}")
-
-    # Set the parameter type
-    func_type_data[parameter_index].type = type_tinfo  # type: ignore
-
-    # Create and save the new function type
-    tinfo = ida_typeinf.tinfo_t()
-    success = tinfo.create_func(func_type_data)
-    if not success:
-        raise Exception(f"Error while creating new type for {address:016x}")
-
-    # Setting to TINFO_DEFINITE due to the decompiler overriding guessed types
-    success = ida_typeinf.apply_tinfo(
-        address, tinfo, ida_typeinf.TINFO_DEFINITE
-    )
-    if not success:
-        raise Exception(f"Error while saving new type for {address:016x}")
+    param = func_type_data[parameter_index]  # type: ignore
+    param.type = _parse_type_annotation(type_annotation)
+    _apply_func_type_data(address, func_type_data)
 
 
 def apply_return_type_sync(
     address: int,
     type_annotation: str,
 ):
-    """Apply a return type annotation to a function.
-
-    Args:
-        address: Function address
-        type_annotation: C type string (e.g., "int", "void*", "MyStruct*")
-    """
     func_type_data = _get_func_type_data(address)
+    func_type_data.rettype = _parse_type_annotation(type_annotation)
+    _apply_func_type_data(address, func_type_data)
 
-    # Parse the type annotation into a tinfo_t
-    type_tinfo = ida_typeinf.tinfo_t()
-    parse_result = ida_typeinf.parse_decl(
-        type_tinfo,
-        None,  # type: ignore
-        f"{type_annotation} a;",
-        ida_typeinf.PT_SIL,
-    )
-    if parse_result is None:
-        raise Exception(f"Failed to parse type annotation: {type_annotation}")
 
-    # Set the return type (KEY DIFFERENCE from parameter type)
-    func_type_data.rettype = type_tinfo
+def apply_func_types_batch_sync(
+    address: int,
+    *,
+    parameter_types: ty.Optional[dict[int, str]] = None,
+    return_type: ty.Optional[str] = None,
+) -> None:
+    """
+    Apply multiple type changes to a function in a single apply_tinfo call.
 
-    # Create and save the new function type
-    tinfo = ida_typeinf.tinfo_t()
-    success = tinfo.create_func(func_type_data)
-    if not success:
-        raise Exception(f"Error while creating new type for {address:016x}")
+    Individual parse failures are logged and skipped. The remaining valid
+    types are still applied.
+    """
+    if not parameter_types and return_type is None:
+        return
 
-    # Setting to TINFO_DEFINITE due to the decompiler overriding guessed types
-    success = ida_typeinf.apply_tinfo(
-        address, tinfo, ida_typeinf.TINFO_DEFINITE
-    )
-    if not success:
-        raise Exception(f"Error while saving new type for {address:016x}")
+    func_type_data = _get_func_type_data(address)
+    any_modified = False
+
+    if parameter_types:
+        for param_index, type_annotation in parameter_types.items():
+            try:
+                param = func_type_data[param_index]  # type: ignore
+                param.type = _parse_type_annotation(type_annotation)
+                any_modified = True
+            except Exception as ex:
+                logger.warning(
+                    "Failed to set parameter type",
+                    address=address,
+                    parameter_index=param_index,
+                    type_annotation=type_annotation,
+                    exc_info=ex,
+                )
+
+    if return_type is not None:
+        try:
+            func_type_data.rettype = _parse_type_annotation(return_type)
+            any_modified = True
+        except Exception as ex:
+            logger.warning(
+                "Failed to set return type",
+                address=address,
+                type_annotation=return_type,
+                exc_info=ex,
+            )
+
+    if not any_modified:
+        return
+
+    _apply_func_type_data(address, func_type_data)
 
 
 _CFunc: tye.TypeAlias = ty.Union[ida_hexrays.cfunc_t, ida_hexrays.cfuncptr_t]

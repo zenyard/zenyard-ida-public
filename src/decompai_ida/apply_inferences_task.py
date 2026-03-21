@@ -5,7 +5,7 @@ import ida_kernwin
 from more_itertools import partition
 
 from decompai_client import VariablesMapping
-from decompai_ida import api, ida_tasks, inferences, logger
+from decompai_ida import api, ida_tasks, inferences, logger, type_manager
 from decompai_ida.model import AddressInference
 from decompai_ida.tasks import ForegroundTask
 
@@ -66,6 +66,12 @@ class ApplyInferencesTask(ForegroundTask):
             self._wait_box.mark_items_complete(len(batch))
             self._ctx.model.notify_update()
             ida_tasks.execute_queued_tasks_sync()
+
+        # Reconcile type library once after all inferences are processed.
+        type_manager.reconcile_type_library_sync(
+            model=self._ctx.model, wait_box=self._wait_box
+        )
+        self._ctx.model.notify_update()
 
         # Update visible decompiled code, in case it has pending inferences.
         _update_pseudocode_viewer()

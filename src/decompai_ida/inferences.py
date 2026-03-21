@@ -54,61 +54,19 @@ def apply_pending_inferences_sync(address: int, *, model: Model):
         model.pending_inferences.clear_address_sync(address)
 
 
-def _track_struct_usage(
-    address: int,
-    inferences: ty.Collection[AddressInference],
-    *,
-    model: Model,
-) -> None:
-    """
-    Track struct usage from inferences without applying them to IDA.
-
-    This must be called before reconcile_type_library_sync so it knows which
-    structs are needed and can compute effective names for collisions.
-    """
-    for inference in inferences:
-        if isinstance(inference, ParameterType):
-            type_manager.set_parameter_struct_sync(
-                address,
-                inference.parameter_index,
-                inference.struct_id,
-                model=model,
-            )
-        elif isinstance(inference, ReturnType):
-            type_manager.set_return_struct_sync(
-                address,
-                inference.struct_id,
-                model=model,
-            )
-
-
 def apply_inferences_sync(inferences: ty.Iterable[Inference], *, model: Model):
-    # Partition inferences into global and address-bound
     global_inferences: list[GlobalInference] = []
     by_address = defaultdict[int, list[AddressInference]](list)
 
     for inference in inferences:
-        # GlobalInference types (StructDefinition) don't have 'address' attribute
         if isinstance(inference, StructDefinition):
             global_inferences.append(inference)
         else:
-            # AddressInference types all have address field
             by_address[api.parse_address(inference.address)].append(inference)
 
-    # Apply global inferences first (they define types used by address inferences)
     if global_inferences:
         _apply_global_inferences(global_inferences, model=model)
 
-    # Track struct usage from all inferences BEFORE reconciling
-    # This allows reconcile to know which structs are needed and compute effective names
-    for address, address_inferences in by_address.items():
-        _track_struct_usage(address, address_inferences, model=model)
-
-    # Reconcile IDA's type library - computes effective names for collisions
-    # Must happen AFTER tracking usage but BEFORE applying types
-    type_manager.reconcile_type_library_sync(model=model)
-
-    # Apply address-bound inferences (can now substitute names correctly)
     for address, address_inferences in by_address.items():
         _apply_inferences_for_address(address, address_inferences, model=model)
 
