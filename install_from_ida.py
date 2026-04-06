@@ -230,7 +230,7 @@ def install_or_upgrade_package(source: str, *, target: Path):
 
 def run_pip(args: ty.Iterable[str]):
     subprocess.run(
-        [python_executable(), "-m", "pip", *args],
+        [str(python_executable()), "-m", "pip", *args],
         startupinfo=get_hidden_window_startupinfo(),
         capture_output=True,
         check=True,
