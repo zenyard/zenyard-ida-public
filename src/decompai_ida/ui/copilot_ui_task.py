@@ -3,7 +3,11 @@ import ida_kernwin
 import idaapi
 import typing as ty
 
+from decompai_client.models import (
+    CopilotOpenEvent,
+)
 from decompai_ida import ida_tasks, logger
+from decompai_ida.analytics_task import analytics_timestamp
 from decompai_ida.tasks import Task, TaskContext
 from decompai_ida.ui.copilot import CopilotWindow, CopilotViewModel
 
@@ -55,7 +59,6 @@ class CopilotUiTask(Task):
         # Create view model
         self._view_model = CopilotViewModel(self._ctx.copilot_model)
 
-        # Create action handler
         self._action_handler = OpenCopilotActionHandler(self)
 
         async with ida_tasks.install_action(
@@ -82,12 +85,14 @@ class CopilotUiTask(Task):
     def open_copilot_window(self) -> None:
         """Open the copilot window or focus if already open."""
         try:
+            is_new_window = False
             if ida_kernwin.find_widget(ZENYARD_COPILOT_TAB_NAME) is None:
                 # Create new window
                 if self._view_model is None:
                     logger.error("View model not initialized")
                     return
 
+                is_new_window = True
                 self._current_window = CopilotWindow(self._view_model)
                 self._current_window.Show(ZENYARD_COPILOT_TAB_NAME)
 
@@ -104,6 +109,12 @@ class CopilotUiTask(Task):
                 # Window already exists, just focus it
                 if self._current_window is not None:
                     self._current_window.input_focus()
+
+            # Emit analytics event for new window opens
+            if is_new_window:
+                self._ctx.emit_analytics_event(
+                    CopilotOpenEvent(timestamp=analytics_timestamp())
+                )
 
         except Exception as e:
             logger.error(f"Error opening copilot window: {e}")

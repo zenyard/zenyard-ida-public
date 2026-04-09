@@ -3,6 +3,7 @@ from pathlib import Path
 import typing as ty
 
 import ida_kernwin
+from decompai_client import PausedDialgBoxUserResponse
 from decompai_client.models.swift_rejection_reason import SwiftRejectionReason
 
 from decompai_ida import ida_tasks
@@ -99,7 +100,7 @@ def warn_cant_open_swift_pseudocode_sync():
     )
 
 
-async def warn_plan_ended():
+async def warn_plan_ended() -> PausedDialgBoxUserResponse:
     _BINARY_PAUSED_MESSAGE = cleandoc(f"""
         BUTTON YES Contact Us
         BUTTON CANCEL Close 
@@ -111,3 +112,5 @@ async def warn_plan_ended():
     form = await ida_tasks.run_ui(ida_kernwin.ask_form, _BINARY_PAUSED_MESSAGE)
     if form == ida_kernwin.ASKBTN_YES:
         send_email_with_mailto(EMAIL_ADDRESS, EMAIL_SUBJECT, EMAIL_BODY)
+        return PausedDialgBoxUserResponse.CONTACT_US
+    return PausedDialgBoxUserResponse.CANCEL

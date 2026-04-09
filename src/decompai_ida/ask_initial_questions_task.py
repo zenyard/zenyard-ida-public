@@ -5,7 +5,13 @@ from inspect import cleandoc
 import ida_kernwin
 import typing_extensions as tye
 
+from decompai_client import AnalysisSource, AnalysisType
+from decompai_client.models import (
+    AnalysisAcceptedEvent,
+    InitialAnalysisDismissedEvent,
+)
 from decompai_ida import binary, ida_tasks, logger
+from decompai_ida.analytics_task import analytics_timestamp
 from decompai_ida.preprocessing_task import PreprocessingTask
 from decompai_ida.queue_revisions_task import QueueRevisionsTask
 from decompai_ida.register_binary_task import BinaryExceedsSizeLimitError
@@ -53,6 +59,9 @@ class ShowInitialQuestionsTask(ForegroundTask):
         logger.info("Initial questions form result", result=form_result)
 
         if not isinstance(form_result, _Accepted):
+            self._ctx.emit_analytics_event(
+                InitialAnalysisDismissedEvent(timestamp=analytics_timestamp())
+            )
             return
 
         # Mark as asked only if the user accepted
@@ -75,7 +84,6 @@ class ShowInitialQuestionsTask(ForegroundTask):
         self._ctx.model.runtime_status.queue_foreground_task_if_not_already_queued(
             QueueRevisionsTask()
         )
-
         # Save binary instructions
         self._ctx.model.binary_instructions.set_sync(binary_instructions)
         self._ctx.model.notify_update()
@@ -113,6 +121,24 @@ class AskInitialQuestions(Task):
         await logger.get().ainfo("Queueing initial questions dialog")
         self._ctx.model.runtime_status.queue_foreground_task_if_not_already_queued(
             ShowInitialQuestionsTask()
+        )
+
+        # We wait here for binary registration (happens after initial questions are ANSWERED!)
+        # and emit an AnalysisAcceptedEvent with a binary_id (No binary id exists before binary_registration)
+        # Notice Binary registration is dependant on initial questions being answered
+        # TODO - ZEN-411 improve ida flow for initial questions/analysis/binary registration
+        await self._ctx.model.wait_for_registration()
+        binary_instructions = await self._ctx.model.binary_instructions.get()
+        binary_id = self._ctx.model.binary_id.get_sync()
+        assert binary_id is not None
+        self._ctx.emit_analytics_event(
+            AnalysisAcceptedEvent(
+                timestamp=analytics_timestamp(),
+                binary_id=binary_id,
+                start_source=AnalysisSource.NEW_FILE_OPEN,
+                analysis_type=AnalysisType.INITIAL_ANALYSIS,
+                user_prompt=binary_instructions is not None,
+            )
         )
 
     async def _verify_binary_allowed(self) -> None:

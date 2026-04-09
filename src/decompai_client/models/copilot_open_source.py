@@ -18,20 +18,20 @@ from enum import Enum
 from typing_extensions import Self
 
 
-class PausedDialgBoxUserResponse(str, Enum):
+class CopilotOpenSource(str, Enum):
     """
-    PausedDialgBoxUserResponse
+    CopilotOpenSource
     """
 
     """
     allowed enum values
     """
-    CONTACT_US = 'CONTACT US'
-    CANCEL = 'CANCEL'
+    MENU_BAR = 'Menu bar'
+    SHORTCUT_KEYS = 'Shortcut Keys'
 
     @classmethod
     def from_json(cls, json_str: str) -> Self:
-        """Create an instance of PausedDialgBoxUserResponse from a JSON string"""
+        """Create an instance of CopilotOpenSource from a JSON string"""
         return cls(json.loads(json_str))
 
 

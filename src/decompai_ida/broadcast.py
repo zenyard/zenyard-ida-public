@@ -1,7 +1,7 @@
 import threading
 import typing as ty
 from abc import abstractmethod
-from collections import OrderedDict
+from collections import OrderedDict, deque
 
 import anyio
 from anyio.abc import AsyncResource, ObjectReceiveStream, ObjectSendStream
@@ -37,6 +37,23 @@ class RecordLatest(Recorder, ty.Generic[_T]):
 
     def get_recorded(self) -> ty.Iterable[_T]:
         return self._recorded
+
+
+class RecordLatestN(Recorder, ty.Generic[_T]):
+    """
+    Hold up to n latest messages, dropping older ones.
+    """
+
+    _recorded: deque[_T]
+
+    def __init__(self, n: int) -> None:
+        self._recorded = deque(maxlen=n)
+
+    def record(self, message: _T):
+        self._recorded.append(message)
+
+    def get_recorded(self) -> ty.Iterable[_T]:
+        return list(self._recorded)
 
 
 class RecordLatestOfEachType(Recorder, ty.Generic[_T]):

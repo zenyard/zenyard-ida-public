@@ -17,6 +17,7 @@ import ida_kernwin
 
 API_URL = globals().get("ZENYARD_API_URL", "https://api.zenyard.ai")
 REPOSITORY = globals().get("ZENYARD_REPOSITORY", "zenyard/zenyard-ida-public")
+DISABLE_ANALYTICS = globals().get("ZENYARD_DISABLE_ANALYTICS", False)
 GIT_TOKEN: ty.Optional[str] = globals().get("ZENYARD_GIT_TOKEN")
 if GIT_TOKEN is not None:
     INSTALL_LOCATION = f"git+https://{GIT_TOKEN}@github.com/{REPOSITORY}.git"
@@ -53,6 +54,16 @@ def mark_current_version_accepted():
         json.dump(config, f)
 
 
+def configure_disable_analytics():
+    with config_path.open("r") as f:
+        config = json.load(f)
+
+    config["disable_analytics"] = True
+
+    with config_path.open("w") as f:
+        json.dump(config, f)
+
+
 def main():
     try:
         config_exists = config_path.exists()
@@ -82,6 +93,9 @@ def main():
             install_configuration(api_key=api_key)
 
         mark_current_version_accepted()
+
+        if DISABLE_ANALYTICS:
+            configure_disable_analytics()
 
         print("[+] All set!")
         stop_running_plugin()
@@ -502,7 +516,7 @@ In these Terms of Use, the following terms shall have the meaning set forth belo
 
 18. ENTIRE AGREEMENT. These Terms of Use are concluded between you and the Company. These Terms of Use, constitute the entire agreement between you and the Company with respect to the Use of the Services, and supersede all prior agreements, proposals, negotiations, representations or communications relating to the subject matter. However, these Terms of Use do not derogate from any other agreement between you and the Company. 
 
-19. UPDATES and AMENDMENTS. We may update or amend these Terms of Use from time to time. Any changes will be posted on our website and will become effective as of the date indicated at the top of the updated Terms of Use, unless otherwise required by applicable law.  Where required by applicable law, or where changes materially affect your rights, we will use commercially reasonable efforts to provide prior notice of such changes. Your continued use of the Services after the effective date of the updated Terms of Use constitutes your acceptance of the amended Terms.
+19. UPDATES and AMENDMENTS. We may update or amend these Terms of Use from time to time. Any changes will be posted on our website and will become effective as of the date indicated at the top of the updated Terms of Use, unless otherwise required by applicable law.Where required by applicable law, or where changes materially affect your rights, we will use commercially reasonable efforts to provide prior notice of such changes. Your continued use of the Services after the effective date of the updated Terms of Use constitutes your acceptance of the amended Terms.
 
 20. CONTACT US. Should you have any question or complaint regarding the Services, please contact us at contact@zenyard.ai
 """.strip().replace("\t", "  ")

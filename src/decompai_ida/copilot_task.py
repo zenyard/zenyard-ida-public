@@ -1,118 +1,46 @@
-import copy
+from dataclasses import dataclass
 import typing as ty
+import uuid
 
-from decompai_ida import logger
-from decompai_ida.model import Message, Task as TodoTask
-from decompai_ida.tasks import Task, TaskContext
-from decompai_client.models.copilot_config import CopilotConfig
-from decompai_ida.copilot_tools import get_copilot_tools
-from langchain_core.messages import AIMessageChunk
-
-import openai
-import anthropic
-import botocore.exceptions
-import google.api_core.exceptions
-import ollama
-from langchain.chat_models import init_chat_model
+import typing_extensions as tye
 from deepagents import create_deep_agent
 from deepagents.middleware.subagents import SubAgent
 from langchain.agents.middleware import ToolRetryMiddleware
+from langchain_core.messages import AIMessageChunk
 from langchain_core.messages.human import HumanMessage
-from langchain_core.rate_limiters import InMemoryRateLimiter
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
-
-AGENT_SYSTEM_PROMPT = """
-You are a reverse engineering AI assistant. Your name is "Zenyard Copilot".
-
-You run inside IDA (Interactive DisAssembler); you have tools to extract information and make changes to the currently opened file.
-
-## Core behavior
-
-- Be concise and action-oriented. Lead with findings, not process.
-- Prefer evidence from tools over assumptions. Never fabricate function names, addresses, or decompilation results.
-- State uncertainty explicitly when tool results are ambiguous or incomplete.
-- Do not end responses with questions or offers for further assistance — avoid pointless back and forth.
-
-## Task management
-
-- For complex or multi-step work, use `write_todos` to track goals. Keep TODOs short and concrete.
-- Skip TODOs for simple, single-step requests.
-
-## Delegation
-
-- Delegate read-only operations (decompile, list functions, resolve addresses, search comments, browse types) using the `task()` tool.
-- Choose the sub-agent role that fits the task:
-  - `explore` — map relevant symbols/functions, find what to investigate next
-  - `researcher` — deep analysis of a subsystem, correlating findings across multiple functions
-  - `critic` — identify gaps or risky assumptions before committing to modifications
-- Keep delegated tasks narrow and self-contained. Bad: "understand the whole binary". Good: "find all callers of sub_1400 and summarize what arguments they pass".
-- When investigating orthogonal aspects (e.g. different functions, callers vs callees, code vs types), launch multiple tasks concurrently.
-
-## Tool strategy
-
-- Use parallel tool calls for independent checks.
-- Cite concrete evidence (addresses, symbol names, xref counts) in your reasoning.
-- Verify target symbol exists before making risky edits.
-- Perform modifications (renaming, setting comments/prototypes) directly using your own tools.
-
-## Exploration strategy
-
-Two approaches — pick based on context and switch if stuck:
-
-1. **Structural/call-graph**: decompile entry points, follow calls depth-first into subsystems.
-2. **Breadth-first**: list functions, search comments/strings, build an overview before diving in.
-
-Pivot rule: if the same approach yields no new information after 2–3 rounds, switch to the other. Use `search_function_comments` as a shortcut before broad exploration.
-
-## Response style
-
-- Start with a direct answer or summary of findings.
-- Keep responses compact — avoid restating what the user already knows.
-- End with clear next steps only when the task is genuinely multi-stage.
-- Output markdown WITHOUT HTML tags (e.g. NO `<br>` tags).
-- When about to call tools, end your text with period, not colon.
-- When using paginated tools, do NOT inform the user about pagination details.
-""".strip()
-
-EXPLORE_SYSTEM_PROMPT = """
-You are an IDA database exploration specialist. You read and analyze the currently opened binary.
-
-Use your tools to fulfill the exploration task. You have access to: function listing, decompilation, caller analysis, symbol resolution, type browsing, comment searching, and Swift source (if available).
-
-Rules:
-- Check `search_function_comments` first as a quick shortcut before broad exploration.
-- For paginated tools, fetch only one page per turn; request next page in your next turn if needed.
-- Pivot rule: if the same tool category yields no new information after 2–3 rounds, switch to a different tool or approach.
-- Return findings as structured output: separate confirmed facts from hypotheses.
-- Focus only on the exploration task given; do not suggest modifications.
-""".strip()
-
-
-_CRITIC_SYSTEM_PROMPT = """
-You are a critical reviewer for reverse engineering analysis inside IDA (Interactive DisAssembler).
-
-Your job: identify gaps, risky assumptions, and missing validation in a plan or interpretation.
-
-- List concrete improvements, highest-impact first.
-- Use tool results as evidence; do not critique based on assumptions.
-- Be direct — flag real risks, not hypothetical ones.
-- Do not suggest modifications to the binary; focus on analysis quality.
-""".strip()
-
-_RESEARCHER_SYSTEM_PROMPT = """
-You are a deep research specialist inside IDA (Interactive DisAssembler).
-
-Your job: build a comprehensive, evidence-grounded picture of a subsystem or behavior.
-
-- Separate confirmed facts (from tool output) from hypotheses (inferred).
-- Correlate findings across multiple functions, types, and xrefs.
-- Prioritize depth over breadth — follow the most promising leads fully.
-- Return structured findings, not raw tool dumps.
-- Do not suggest modifications; focus on understanding.
-""".strip()
+from decompai_client.models import (
+    CopilotClearRequestedEvent,
+    CopilotMessageSentEvent,
+    CopilotStopRequestedEvent,
+)
+from decompai_client.models.copilot_config import CopilotConfig
+from decompai_ida import logger
+from decompai_ida.analytics_task import analytics_timestamp
+from decompai_ida.copilot_middleware import (
+    CopilotDelegatedTaskRetryMiddleware,
+    CopilotLoopGuardMiddleware,
+    loop_guard_state_reset,
+)
+from decompai_ida.copilot_prompts import (
+    CRITIC_SUBAGENT_PROMPT,
+    EXPLORE_SUBAGENT_PROMPT,
+    RESEARCHER_SUBAGENT_PROMPT,
+    TOOLRUNNER_SUBAGENT_PROMPT,
+    build_system_prompt,
+)
+from decompai_ida.copilot_runtime import (
+    CopilotRuntimeConfig,
+    create_chat_model,
+    exception_to_user_message,
+)
+from decompai_ida.copilot_session_notes import append_session_entry
+from decompai_ida.copilot_tools import CopilotTools, get_copilot_tools
+from decompai_ida.model import CopilotModel, Message, Task as TodoTask
+from decompai_ida.tasks import Task, TaskContext
 
 
 # Shown before first tokens
@@ -121,39 +49,67 @@ _STARTING_RESPONSE_PLACEHOLDER = "●"
 COPILOT_THREAD_ID = "1"
 
 
+@dataclass(frozen=True)
+class _CopilotAttemptResult:
+    final_text: str
+    completed_todos: list[str]
+    exception: ty.Optional[Exception] = None
+
+
 class CopilotTask(Task):
     def __init__(self, task_context: TaskContext):
         super().__init__(task_context)
+        self._message_index: int = 0
+        self._analytics_thread_id: str = ""
+        self._copilot_config: ty.Optional[CopilotConfig] = None
+        self._runtime_config: ty.Optional[CopilotRuntimeConfig] = None
+        self._checkpointer: ty.Optional[InMemorySaver] = None
+        self._agent: ty.Optional[CompiledStateGraph] = None
+        self._agent_session_notes: ty.Optional[str] = None
 
     async def _run(self) -> None:
         user_config = await self._ctx.model.wait_for_user_config()
         if user_config.copilot is None:
             return
-        await self._run_copilot(user_config.copilot)
+        self._copilot_config = user_config.copilot
+        self._runtime_config = CopilotRuntimeConfig.from_copilot_config(
+            user_config.copilot
+        )
+        self._checkpointer = InMemorySaver()
+        self._analytics_thread_id = str(uuid.uuid4())
+        await self._run_copilot()
 
-    async def _run_copilot(self, copilot_config: CopilotConfig) -> None:
-        checkpointer = InMemorySaver()
-
+    async def _run_copilot(self) -> None:
         copilot_model = self._ctx.copilot_model
-        agent = await self._create_agent(copilot_config, checkpointer)
+        checkpointer = self._require_checkpointer()
 
-        # Main loop: wait for updates and process messages
         while True:
             if copilot_model.clear_requested:
                 copilot_model.clear_requested = False
                 copilot_model.messages.clear()
+                copilot_model.tasks = []
                 await checkpointer.adelete_thread(COPILOT_THREAD_ID)
+                await self._emit_clear_analytic()
                 copilot_model.notify_update()
                 continue
 
-            # Check if there's a new message from user to process
             if (
                 copilot_model.messages
                 and copilot_model.messages[-1].sender == "User"
             ):
+                user_message = copilot_model.messages[-1]
                 try:
-                    user_message = copilot_model.messages[-1]
-                    await self._handle_user_message(agent, user_message)
+                    await self._emit_message_sent_analytic(user_message)
+                    (
+                        response_text,
+                        completed_todos,
+                    ) = await self._handle_user_message(user_message)
+                    await self._append_session_notes(
+                        self._require_runtime_config(),
+                        user_message=user_message.text,
+                        response_text=response_text,
+                        completed_todos=completed_todos,
+                    )
                 finally:
                     copilot_model.is_active = False
                     copilot_model.stop_requested = False
@@ -163,22 +119,10 @@ class CopilotTask(Task):
                 await copilot_model.wait_for_update()
 
     async def _handle_user_message(
-        self, agent: CompiledStateGraph, user_message: Message
-    ):
-        config: RunnableConfig = {
-            "configurable": {"thread_id": COPILOT_THREAD_ID},
-            "recursion_limit": 300,
-        }
-
+        self,
+        user_message: Message,
+    ) -> tuple[str, list[str]]:
         copilot_model = self._ctx.copilot_model
-
-        # Track message ID to add spaces when new message starts.
-        last_message_id: ty.Optional[str] = None
-
-        # Track tool calls across chunks
-        tool_call_ids = set[str]()
-
-        # Add empty AI message to start filling
         copilot_model.messages.append(
             Message("AI", _STARTING_RESPONSE_PLACEHOLDER)
         )
@@ -186,15 +130,45 @@ class CopilotTask(Task):
         copilot_model.tasks = []
         copilot_model.notify_update()
 
+        result = await self._stream_user_message_attempt(user_message)
+        if result.exception is None:
+            return result.final_text, result.completed_todos
+
+        _set_error_on_current_ai_message(
+            copilot_model,
+            exception_to_user_message(result.exception),
+        )
+        return "", []
+
+    async def _stream_user_message_attempt(
+        self,
+        user_message: Message,
+    ) -> _CopilotAttemptResult:
+        await self._ensure_agent()
+        agent = self._require_agent()
+        runtime_config = self._require_runtime_config()
+
+        config: RunnableConfig = {
+            "configurable": {"thread_id": COPILOT_THREAD_ID},
+            "recursion_limit": runtime_config.recursion_limit,
+        }
+
+        copilot_model = self._ctx.copilot_model
+        last_message_id: ty.Optional[str] = None
+        tool_call_ids = set[str]()
         try:
             async for event in agent.astream(
-                {"messages": [HumanMessage(content=user_message.text)]},
+                {
+                    "messages": [HumanMessage(content=user_message.text)],
+                    **loop_guard_state_reset(),
+                },
                 config,
                 stream_mode=["messages", "updates"],
                 subgraphs=True,
             ):
                 if copilot_model.stop_requested:
                     await logger.ainfo("Stop requested by user")
+                    await self._emit_stop_analytic()
                     break
 
                 namespace, mode, data = event
@@ -206,11 +180,7 @@ class CopilotTask(Task):
                             and (todos := node_output.get("todos")) is not None
                         ):
                             copilot_model.tasks = [
-                                TodoTask(
-                                    content=todo["content"],
-                                    status=todo["status"],
-                                )
-                                for todo in todos
+                                _todo_from_update(todo) for todo in todos
                             ]
                             copilot_model.notify_update()
                     continue
@@ -233,10 +203,8 @@ class CopilotTask(Task):
                                 copilot_model.notify_update()
                     continue
 
-                # mode == "messages"
                 message_chunk, message_metadata = data
 
-                # Did not see this happening, ignore such message chunks
                 if isinstance(message_metadata, str) or isinstance(
                     message_chunk, str
                 ):
@@ -248,7 +216,6 @@ class CopilotTask(Task):
                 )
 
                 if isinstance(message_chunk, AIMessageChunk):
-                    # Clear placeholder
                     if (
                         message_chunk.text
                         and copilot_model.messages[-1].text
@@ -256,7 +223,6 @@ class CopilotTask(Task):
                     ):
                         copilot_model.messages[-1].text = ""
 
-                    # New paragraph if this is a new message (after tool calls).
                     if message_chunk.id is not None:
                         if (
                             last_message_id is not None
@@ -265,10 +231,8 @@ class CopilotTask(Task):
                             copilot_model.messages[-1].text += "\n\n"
                         last_message_id = message_chunk.id
 
-                    # Add text
                     copilot_model.messages[-1].text += message_chunk.text
 
-                    # Count tool calls
                     tool_call_ids.update(
                         tool_chunk["id"]
                         for tool_chunk in message_chunk.tool_call_chunks
@@ -277,180 +241,220 @@ class CopilotTask(Task):
                     copilot_model.messages[-1].tool_count = len(tool_call_ids)
 
                     copilot_model.notify_update()
-        except Exception as e:
-            await logger.aerror(f"Error during agent streaming: {e}")
 
-            # Add error message to chat to inform user
-            if (
-                copilot_model.messages
-                and copilot_model.messages[-1].sender == "AI"
-            ):
-                # Replace the empty AI message with an error message
-                if (
-                    copilot_model.messages[-1].text
-                    == _STARTING_RESPONSE_PLACEHOLDER
-                ):
-                    copilot_model.messages[-1].text = ""
+        except Exception as ex:
+            await logger.aerror(f"Error during agent streaming: {ex}")
+            return _CopilotAttemptResult(
+                final_text=_current_ai_text(copilot_model),
+                completed_todos=_completed_todos(copilot_model),
+                exception=ex,
+            )
 
-                if copilot_model.messages[-1].text:
-                    copilot_model.messages[-1].text += "\n\n"
+        if copilot_model.stop_requested:
+            return _CopilotAttemptResult(
+                final_text="",
+                completed_todos=[],
+            )
 
-                text_for_user = exception_to_user_message(e)
-                copilot_model.messages[-1].text += f"**{text_for_user}**"
+        final_text = _current_ai_text(copilot_model)
+        return _CopilotAttemptResult(
+            final_text=final_text,
+            completed_todos=_completed_todos(copilot_model),
+        )
 
-    async def _create_agent(
-        self, copilot_config: CopilotConfig, checkpointer: InMemorySaver
-    ):
+    async def _emit_message_sent_analytic(self, message: Message) -> None:
+        event = CopilotMessageSentEvent(
+            timestamp=analytics_timestamp(),
+            input_length_chars=len(message.text),
+            thread_id=self._analytics_thread_id,
+            message_index=self._message_index,
+        )
+        self._message_index += 1
+        self._ctx.emit_analytics_event(event)
+
+    async def _emit_stop_analytic(self) -> None:
+        self._ctx.emit_analytics_event(
+            CopilotStopRequestedEvent(timestamp=analytics_timestamp())
+        )
+
+    async def _emit_clear_analytic(self) -> None:
+        self._message_index = 0
+        self._analytics_thread_id = str(uuid.uuid4())
+        self._ctx.emit_analytics_event(
+            CopilotClearRequestedEvent(timestamp=analytics_timestamp())
+        )
+
+    async def _ensure_agent(self) -> None:
+        session_notes = await self._ctx.model.copilot_session_notes.get()
+        if (
+            self._agent is not None
+            and self._agent_session_notes == session_notes
+        ):
+            return
+
+        copilot_config = self._require_copilot_config()
+        runtime_config = self._require_runtime_config()
+        checkpointer = self._require_checkpointer()
+
         await logger.ainfo(
             "Initializing copilot with configuration",
             model_name=copilot_config.model_name,
             model_provider=copilot_config.model_provider,
         )
-        additional_params = copy.deepcopy(copilot_config.additional_params)
-
-        # Use user's API key if not already given in config.
-        if "api_key" not in additional_params:
-            additional_params["api_key"] = self._ctx.plugin_config.api_key
-
-        computed_additional_params: dict[str, ty.Any] = {}
-        if copilot_config.model_provider == "openai":
-            import httpx
-
-            if not additional_params.pop("trust_env", True):
-                computed_additional_params["http_client"] = httpx.Client(
-                    trust_env=False
-                )
-                computed_additional_params["http_async_client"] = (
-                    httpx.AsyncClient(trust_env=False)
-                )
-        if copilot_config.model_provider == "google_anthropic_vertex":
-            credentials_data = additional_params.pop("credentials")
-            from google.oauth2 import service_account
-
-            credentials = service_account.Credentials.from_service_account_info(
-                credentials_data,
-                scopes=[
-                    "https://www.googleapis.com/auth/cloud-platform.read-only"
-                ],
-            )
-            computed_additional_params["credentials"] = credentials
-        if "max_retries" not in additional_params:
-            additional_params["max_retries"] = 4
-        llm = init_chat_model(
-            copilot_config.model_name,
-            model_provider=copilot_config.model_provider,
-            rate_limiter=InMemoryRateLimiter(requests_per_second=15 / 60),
-            **additional_params,
-            **computed_additional_params,
+        llm = create_chat_model(
+            copilot_config,
+            plugin_api_key=self._ctx.plugin_config.api_key,
         )
         tools = await get_copilot_tools(self._ctx.model)
 
-        # Handle tool errors gracefully by converting exceptions to error messages
         tool_error_handler = ToolRetryMiddleware(
-            max_retries=0,  # Don't retry, just catch and handle errors
-            on_failure="continue",  # Continue execution instead of raising
+            max_retries=0,
+            on_failure="continue",
         )
+        middleware = [
+            tool_error_handler,
+            CopilotDelegatedTaskRetryMiddleware(runtime_config),
+            CopilotLoopGuardMiddleware(runtime_config),
+        ]
 
-        explore_subagent: SubAgent = {  # type: ignore
-            "name": "explore",
-            "description": (
-                "Map relevant symbols and functions to inspect next. Use for initial orientation: "
-                "finding what exists, listing functions, resolving symbol addresses, "
-                "and building a prioritized investigation path. "
-                "Use multiple explore agents concurrently when investigating orthogonal aspects."
-            ),
-            "system_prompt": EXPLORE_SYSTEM_PROMPT,
-            "tools": tools.exploration + tools.common,
-            "middleware": [tool_error_handler],
-        }
-
-        researcher_subagent: SubAgent = {  # type: ignore
-            "name": "researcher",
-            "description": (
-                "Deep research and evidence gathering. Use for thorough analysis of subsystems, "
-                "correlating findings across multiple functions, or building a comprehensive "
-                "picture of behavior."
-            ),
-            "system_prompt": _RESEARCHER_SYSTEM_PROMPT,
-            "tools": tools.exploration + tools.common,
-            "middleware": [tool_error_handler],
-        }
-
-        critic_subagent: SubAgent = {  # type: ignore
-            "name": "critic",
-            "description": (
-                "Critique a plan or interpretation. Use to identify gaps, risky assumptions, "
-                "or missing validation before committing to modifications."
-            ),
-            "system_prompt": _CRITIC_SYSTEM_PROMPT,
-            "tools": tools.exploration + tools.common,
-            "middleware": [tool_error_handler],
-        }
-
-        return create_deep_agent(
+        self._agent = create_deep_agent(
             model=llm,
-            tools=tools.modification + tools.exploration + tools.common,
-            system_prompt=AGENT_SYSTEM_PROMPT,
+            tools=tools.all_tools(),
+            system_prompt=build_system_prompt(session_notes=session_notes),
             checkpointer=checkpointer,
-            middleware=[tool_error_handler],
-            subagents=[  # type: ignore
-                explore_subagent,
-                researcher_subagent,
-                critic_subagent,
-            ],
+            middleware=middleware,
+            subagents=_build_subagents(tools, tool_error_handler),  # type: ignore
             debug=self._ctx.plugin_config.log_level == "DEBUG",
         )
+        self._agent_session_notes = session_notes
+
+    async def _append_session_notes(
+        self,
+        runtime_config: CopilotRuntimeConfig,
+        *,
+        user_message: str,
+        response_text: str,
+        completed_todos: list[str],
+    ) -> None:
+        if not response_text.strip() and not completed_todos:
+            return
+        existing_notes = await self._ctx.model.copilot_session_notes.get()
+        updated_notes = append_session_entry(
+            existing_notes,
+            user_query=user_message,
+            completed_todos=completed_todos,
+            response_snippet=response_text,
+            max_chars=runtime_config.session_notes_max_chars,
+        )
+        await self._ctx.model.copilot_session_notes.set(updated_notes)
+
+    def _require_copilot_config(self) -> CopilotConfig:
+        if self._copilot_config is None:
+            raise RuntimeError("Copilot config is not initialized.")
+        return self._copilot_config
+
+    def _require_runtime_config(self) -> CopilotRuntimeConfig:
+        if self._runtime_config is None:
+            raise RuntimeError("Copilot runtime config is not initialized.")
+        return self._runtime_config
+
+    def _require_checkpointer(self) -> InMemorySaver:
+        if self._checkpointer is None:
+            raise RuntimeError("Copilot checkpointer is not initialized.")
+        return self._checkpointer
+
+    def _require_agent(self) -> CompiledStateGraph:
+        if self._agent is None:
+            raise RuntimeError("Copilot agent is not initialized.")
+        return self._agent
 
 
-def exception_to_user_message(exception: Exception) -> str:
-    """
-    Translate an exception into a user-facing error message for the copilot chat.
-    """
-    # Join the list into a single string
-    if _is_rate_limit_Error(exception):
-        return "This request was rate-limited. Please try again soon."
-    if _is_quota_exceeded(exception):
-        return "User's quota exhausted. Upgrade or Contact us to continue."
-    return (
-        "I encountered an error while processing your request. "
-        "Please try again or rephrase your question."
+def _build_subagents(
+    tools: CopilotTools,
+    tool_error_handler: ToolRetryMiddleware,
+) -> list[SubAgent]:
+    read_tools = tools.common + tools.exploration
+    return [
+        SubAgent(  # type: ignore
+            name="explore",
+            description=(
+                "Focused read-only exploration of the IDA database. Use for "
+                "call chains, xrefs, strings, types, comments, and symbols."
+            ),
+            system_prompt=EXPLORE_SUBAGENT_PROMPT,
+            tools=read_tools,
+            middleware=[tool_error_handler],
+        ),
+        SubAgent(  # type: ignore
+            name="researcher",
+            description=(
+                "Deep evidence gathering and synthesis for harder reverse "
+                "engineering questions."
+            ),
+            system_prompt=RESEARCHER_SUBAGENT_PROMPT,
+            tools=read_tools,
+            middleware=[tool_error_handler],
+        ),
+        SubAgent(  # type: ignore
+            name="critic",
+            description=(
+                "Reviews the current plan or interpretation for gaps, risks, "
+                "and missing validation."
+            ),
+            system_prompt=CRITIC_SUBAGENT_PROMPT,
+            tools=read_tools,
+            middleware=[tool_error_handler],
+        ),
+        SubAgent(  # type: ignore
+            name="toolrunner",
+            description=(
+                "Execution-focused analysis helper that proposes and performs "
+                "the best next read-only tool calls."
+            ),
+            system_prompt=TOOLRUNNER_SUBAGENT_PROMPT,
+            tools=read_tools,
+            middleware=[tool_error_handler],
+        ),
+    ]
+
+
+def _todo_from_update(todo: dict[str, ty.Any]) -> TodoTask:
+    status = str(todo.get("status", "pending"))
+    if status not in {"pending", "in_progress", "completed"}:
+        status = "pending"
+    normalized_status = ty.cast(
+        tye.Literal["pending", "in_progress", "completed"], status
+    )
+    return TodoTask(
+        content=str(todo.get("content", "")), status=normalized_status
     )
 
 
-def _is_quota_exceeded(exception: Exception):
-    if str(getattr(exception, "status_code", "")) == "402":
-        return True
-    return False
+def _completed_todos(copilot_model: CopilotModel) -> list[str]:
+    return [
+        task.content
+        for task in copilot_model.tasks
+        if task.status == "completed"
+    ]
 
 
-def _is_rate_limit_Error(exception: Exception) -> bool:
-    if isinstance(
-        exception,
-        (
-            google.api_core.exceptions.TooManyRequests,
-            google.api_core.exceptions.ResourceExhausted,
-            openai.RateLimitError,
-            anthropic.RateLimitError,
-        ),
-    ):
-        return True
+def _current_ai_text(copilot_model: CopilotModel) -> str:
+    if not copilot_model.messages or copilot_model.messages[-1].sender != "AI":
+        return ""
+    final_text = copilot_model.messages[-1].text
+    if final_text == _STARTING_RESPONSE_PLACEHOLDER:
+        final_text = ""
+        copilot_model.messages[-1].text = ""
+    return final_text
 
-    if (
-        isinstance(exception, botocore.exceptions.ClientError)
-        and exception.response.get("Error", {}).get("Code")
-        == "ThrottlingException"
-    ):
-        return True
 
-    if (
-        isinstance(exception, ollama.ResponseError)
-        and exception.status_code == 429
-    ):
-        return True
-
-    # Fallback heuristic for other providers
-    exception_str = str(exception).lower()
-    if "rate" in exception_str and "limit" in exception_str:
-        return True
-
-    return False
+def _set_error_on_current_ai_message(
+    copilot_model: CopilotModel, error_text: str
+) -> None:
+    if not copilot_model.messages or copilot_model.messages[-1].sender != "AI":
+        return
+    if copilot_model.messages[-1].text == _STARTING_RESPONSE_PLACEHOLDER:
+        copilot_model.messages[-1].text = ""
+    if copilot_model.messages[-1].text:
+        copilot_model.messages[-1].text += "\n\n"
+    copilot_model.messages[-1].text += f"**{error_text}**"

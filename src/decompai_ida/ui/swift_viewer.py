@@ -128,7 +128,9 @@ class SwiftCodeViewer(ida_kernwin.simplecustviewer_t):
     and associated metadata.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+    ) -> None:
         """Initialize the Swift code viewer."""
         super().__init__()
         self._start_ea: ty.Optional[int] = None

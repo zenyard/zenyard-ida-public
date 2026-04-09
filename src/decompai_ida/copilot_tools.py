@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from itertools import dropwhile, islice
 import re
 import typing as ty
 
@@ -6,7 +7,10 @@ import ida_bytes
 import ida_funcs
 import ida_hexrays
 import ida_kernwin
+import ida_lines
 import ida_name
+import ida_nalt
+import ida_segment
 import ida_typeinf
 import idaapi
 import idautils
@@ -18,7 +22,6 @@ from decompai_ida.swift_utils import (
     find_latest_swift_function_inference_sync,
     is_swift_binary_sync,
 )
-from itertools import dropwhile, islice
 from langchain.tools import tool
 
 Address = ty.Annotated[str, "The address in hex string"]
@@ -34,6 +37,9 @@ class CopilotTools:
     common: list[ty.Any]
     exploration: list[ty.Any]
     modification: list[ty.Any]
+
+    def all_tools(self) -> list[ty.Any]:
+        return [*self.common, *self.exploration, *self.modification]
 
 
 @dataclass(frozen=True)
@@ -63,6 +69,59 @@ class Function:
 class LocalType:
     name: str
     definition: str
+
+
+@dataclass(frozen=True)
+class Xref:
+    from_address: Address
+    to_address: Address
+    kind: str
+    xref_type_name: str
+    function_address: ty.Optional[Address]
+    function_name: ty.Optional[str]
+
+
+@dataclass(frozen=True)
+class StringItem:
+    address: Address
+    length: int
+    type: str
+    value: str
+
+
+@dataclass(frozen=True)
+class Segment:
+    name: str
+    start_address: Address
+    end_address: Address
+    size: int
+
+
+@dataclass(frozen=True)
+class ImportedSymbol:
+    module: str
+    name: str
+    address: ty.Optional[Address]
+
+
+@dataclass(frozen=True)
+class ExportedSymbol:
+    ordinal: int
+    name: str
+    address: Address
+
+
+@dataclass(frozen=True)
+class AddressDetails:
+    address: Address
+    name: ty.Optional[str]
+    segment: ty.Optional[str]
+    function_address: ty.Optional[Address]
+    function_name: ty.Optional[str]
+    is_code: bool
+    is_data: bool
+    comment: ty.Optional[str]
+    bytes_preview: str
 
 
 class BatchResult(BaseModel, frozen=True):
@@ -273,14 +332,6 @@ def set_function_prototypes_sync(
     )
 
 
-def get_bytes_sync(address: str, size: int) -> str:
-    ea = int(address, 16)
-    data = ida_bytes.get_bytes(ea, size)
-    if data is None:
-        raise Exception(f"Failed to read {size} bytes at {address}")
-    return data.hex(" ")
-
-
 def get_local_types_sync(
     cursor: ty.Optional[str] = None, page_size: int = 200
 ) -> PagedResults[LocalType]:
@@ -398,6 +449,308 @@ def list_functions_sync(
     return _paginate_functions(model, cursor, page_size, name_matches)
 
 
+def list_called_functions_sync(
+    model: Model,
+    address: str,
+    cursor: ty.Optional[str] = None,
+    page_size: int = 200,
+) -> PagedResults[Function]:
+    func = get_function(address)
+    called_functions = sorted(
+        {
+            called_func.start_ea
+            for item_ea in idautils.FuncItems(func.start_ea)
+            for ref_ea in idautils.CodeRefsFrom(item_ea, False)
+            if (called_func := ida_funcs.get_func(ref_ea)) is not None
+        }
+    )
+    return _paginate_results(
+        called_functions,
+        by=format_address,
+        cursor=cursor,
+        page_size=page_size,
+    ).map(lambda ea: Function.from_ea(model, ea))
+
+
+def get_xrefs_to_sync(
+    address: str,
+    cursor: ty.Optional[str] = None,
+    page_size: int = 200,
+) -> PagedResults[Xref]:
+    target_ea = int(address, 16)
+    xrefs = sorted(
+        (_xref_from_ida(xref) for xref in idautils.XrefsTo(target_ea, 0)),
+        key=_xref_cursor_to,
+    )
+    return _paginate_results(
+        xrefs,
+        by=_xref_cursor_to,
+        cursor=cursor,
+        page_size=page_size,
+    )
+
+
+def get_xrefs_from_sync(
+    address: str,
+    cursor: ty.Optional[str] = None,
+    page_size: int = 200,
+) -> PagedResults[Xref]:
+    ea = int(address, 16)
+    func = ida_funcs.get_func(ea)
+    merged: list[Xref] = []
+    if func is not None and func.start_ea == ea:
+        for item_ea in idautils.FuncItems(func.start_ea):
+            merged.extend(
+                _xref_from_ida(xref) for xref in idautils.XrefsFrom(item_ea, 0)
+            )
+    else:
+        merged.extend(
+            _xref_from_ida(xref) for xref in idautils.XrefsFrom(ea, 0)
+        )
+    deduped = {_xref_cursor_from(x): x for x in merged}
+    xrefs = sorted(deduped.values(), key=_xref_cursor_from)
+    return _paginate_results(
+        xrefs,
+        by=_xref_cursor_from,
+        cursor=cursor,
+        page_size=page_size,
+    )
+
+
+def list_strings_sync(
+    filter: ty.Optional[str],
+    cursor: ty.Optional[str] = None,
+    page_size: int = 200,
+) -> PagedResults[StringItem]:
+    strings = idautils.Strings(default_setup=True)
+    pattern = re.compile(filter) if filter is not None else None
+    results = sorted(
+        (
+            StringItem(
+                address=format_address(string.ea),
+                length=int(string.length),
+                type=_string_type_label(int(string.strtype)),
+                value=str(string),
+            )
+            for string in strings
+            if pattern is None or pattern.search(str(string)) is not None
+        ),
+        key=lambda string: string.address,
+    )
+    return _paginate_results(
+        results,
+        by=lambda string: string.address,
+        cursor=cursor,
+        page_size=page_size,
+    )
+
+
+def list_segments_sync(
+    cursor: ty.Optional[str] = None,
+    page_size: int = 200,
+) -> PagedResults[Segment]:
+    segments = sorted(
+        (
+            Segment(
+                name=segment.name,
+                start_address=format_address(segment.start_ea),
+                end_address=format_address(segment.end_ea),
+                size=int(segment.end_ea - segment.start_ea),
+            )
+            for i in range(ida_segment.get_segm_qty())
+            if (segment := ida_segment.getnseg(i)) is not None
+        ),
+        key=lambda segment: segment.start_address,
+    )
+    return _paginate_results(
+        segments,
+        by=lambda segment: segment.start_address,
+        cursor=cursor,
+        page_size=page_size,
+    )
+
+
+def list_imports_sync(
+    cursor: ty.Optional[str] = None,
+    page_size: int = 200,
+) -> PagedResults[ImportedSymbol]:
+    imported_symbols = list[ImportedSymbol]()
+    module_count = ida_nalt.get_import_module_qty()
+    for module_index in range(module_count):
+        module_name = ida_nalt.get_import_module_name(module_index)
+        normalized_module_name = module_name or f"module_{module_index}"
+
+        def _collect_import(
+            ea: int, name: ty.Optional[str], ordinal: int
+        ) -> bool:
+            symbol_name = name or f"ordinal_{ordinal}"
+            imported_symbols.append(
+                ImportedSymbol(
+                    module=normalized_module_name,
+                    name=symbol_name,
+                    address=(
+                        format_address(ea) if ea != idaapi.BADADDR else None
+                    ),
+                )
+            )
+            return True
+
+        ida_nalt.enum_import_names(module_index, _collect_import)
+
+    imported_symbols.sort(key=lambda symbol: (symbol.module, symbol.name))
+    return _paginate_results(
+        imported_symbols,
+        by=_import_symbol_cursor,
+        cursor=cursor,
+        page_size=page_size,
+    )
+
+
+def list_exports_sync(
+    cursor: ty.Optional[str] = None,
+    page_size: int = 200,
+) -> PagedResults[ExportedSymbol]:
+    exports = sorted(
+        (
+            ExportedSymbol(
+                ordinal=int(ordinal),
+                name=str(name) if name else "",
+                address=format_address(int(ea)),
+            )
+            for _index, ordinal, ea, name in idautils.Entries()
+        ),
+        key=lambda item: item.address,
+    )
+    return _paginate_results(
+        exports,
+        by=lambda item: item.address,
+        cursor=cursor,
+        page_size=page_size,
+    )
+
+
+def read_data_at_address_sync(address: str, size: int = 64) -> str:
+    data = ida_bytes.get_bytes(int(address, 16), size)
+    if data is None:
+        raise Exception(f"Failed to read bytes at {address}")
+    hex_bytes = data.hex(" ")
+    utf8_preview = "".join(
+        c if (c.isprintable() or c in " \t\n\r") else "."
+        for c in data.decode("utf-8", errors="surrogateescape")
+    )
+    return (
+        f"Address: {address}\n"
+        f"Size: {len(data)}\n"
+        f"Hex: {hex_bytes}\n"
+        f"UTF-8 preview (dots = non-printable or decoding issues): {utf8_preview}"
+    )
+
+
+def get_bytes_sync(address: str, size: int) -> str:
+    data = ida_bytes.get_bytes(int(address, 16), size)
+    if data is None:
+        raise Exception(f"Failed to read bytes at {address}")
+    return data.hex(" ")
+
+
+def disassemble_function_sync(address: str, *, max_lines: int = 400) -> str:
+    func = get_function(address)
+    lines = list[str]()
+    for item_ea in idautils.FuncItems(func.start_ea):
+        if len(lines) >= max_lines:
+            lines.append(
+                f"... (truncated after {max_lines} lines;  "
+                "Increase the max_lines parameter to get more lines)"
+            )
+            break
+        disasm = ida_lines.tag_remove(
+            ida_lines.generate_disasm_line(item_ea, 0) or ""
+        ).strip()
+        lines.append(f"{format_address(item_ea)}: {disasm}")
+    return "\n".join(lines)
+
+
+def get_current_address_sync() -> Address:
+    return format_address(idaapi.get_screen_ea())
+
+
+def get_address_details_sync(address: str) -> AddressDetails:
+    ea = int(address, 16)
+    flags = ida_bytes.get_full_flags(ea)
+    segment = ida_segment.getseg(ea)
+    func = ida_funcs.get_func(ea)
+    bytes_preview = ida_bytes.get_bytes(ea, 16) or b""
+    return AddressDetails(
+        address=format_address(ea),
+        name=ida_name.get_name(ea) or None,
+        segment=segment.name if segment is not None else None,
+        function_address=(
+            format_address(func.start_ea) if func is not None else None
+        ),
+        function_name=ida_name.get_name(func.start_ea)
+        if func is not None
+        else None,
+        is_code=ida_bytes.is_code(flags),
+        is_data=ida_bytes.is_data(flags),
+        comment=idaapi.get_cmt(ea, False),
+        bytes_preview=bytes_preview.hex(" "),
+    )
+
+
+_IMPORT_CURSOR_SEP = "\x1f"
+
+
+def _import_symbol_cursor(symbol: ImportedSymbol) -> str:
+    return f"{symbol.module}{_IMPORT_CURSOR_SEP}{symbol.name}"
+
+
+def _string_type_label(strtype: int) -> str:
+    try:
+        label = ida_nalt.encoding_from_strtype(strtype)
+    except Exception:
+        return str(strtype)
+    return label if label else str(strtype)
+
+
+def _describe_xref(xref: ty.Any) -> tuple[str, str]:
+    xref_type = int(getattr(xref, "type"))
+    is_code = bool(getattr(xref, "iscode", False))
+    kind = "code" if is_code else "data"
+    try:
+        name = idautils.XrefTypeName(xref_type)
+    except Exception:
+        name = ""
+    type_name = name.strip() if name else str(xref_type)
+    return kind, type_name
+
+
+def _xref_from_ida(xref: ty.Any) -> Xref:
+    from_ea = int(getattr(xref, "frm"))
+    to_ea = int(getattr(xref, "to"))
+    kind, xref_type_name = _describe_xref(xref)
+    func = ida_funcs.get_func(from_ea)
+    return Xref(
+        from_address=format_address(from_ea),
+        to_address=format_address(to_ea),
+        kind=kind,
+        xref_type_name=xref_type_name,
+        function_address=(
+            format_address(func.start_ea) if func is not None else None
+        ),
+        function_name=ida_name.get_name(func.start_ea)
+        if func is not None
+        else None,
+    )
+
+
+def _xref_cursor_to(xref: Xref) -> str:
+    return f"{xref.from_address}\x1f{xref.kind}\x1f{xref.xref_type_name}"
+
+
+def _xref_cursor_from(xref: Xref) -> str:
+    return f"{xref.to_address}\x1f{xref.kind}\x1f{xref.xref_type_name}"
+
+
 def _update_pseudocode_viewer():
     current_vdui = ida_hexrays.get_widget_vdui(ida_kernwin.get_current_viewer())
 
@@ -495,6 +848,19 @@ async def get_copilot_tools(model: Model):
         return await ida_tasks.run(decompile_function_sync, address)
 
     @tool()
+    async def disassemble_function(
+        address: ty.Annotated[str, "Address of the function to disassemble"],
+        max_lines: ty.Annotated[
+            int,
+            "Maximum number of instruction lines to return (default 400)",
+        ] = 400,
+    ) -> str:
+        """Returns the disassembly listing of the given function"""
+        return await ida_tasks.run(
+            disassemble_function_sync, address, max_lines=max_lines
+        )
+
+    @tool()
     async def rename_function_local_variables(
         address: ty.Annotated[str, "Address of the function"],
         variable_renames: ty.Annotated[
@@ -529,6 +895,32 @@ async def get_copilot_tools(model: Model):
         return await ida_tasks.run(
             list_calling_functions_sync, model, address, cursor
         )
+
+    @tool()
+    async def list_called_functions(
+        address: ty.Annotated[str, "Address of the caller function"],
+        cursor: ty.Annotated[ty.Optional[str], "Cursor for pagination"] = None,
+    ) -> PagedResults[Function]:
+        """Returns a list of functions called by the given function"""
+        return await ida_tasks.run(
+            list_called_functions_sync, model, address, cursor
+        )
+
+    @tool()
+    async def get_xrefs_to(
+        address: ty.Annotated[str, "Address being referenced"],
+        cursor: ty.Annotated[ty.Optional[str], "Cursor for pagination"] = None,
+    ) -> PagedResults[Xref]:
+        """Returns cross references that point to the given address"""
+        return await ida_tasks.run(get_xrefs_to_sync, address, cursor)
+
+    @tool()
+    async def get_xrefs_from(
+        address: ty.Annotated[str, "Address emitting references"],
+        cursor: ty.Annotated[ty.Optional[str], "Cursor for pagination"] = None,
+    ) -> PagedResults[Xref]:
+        """Returns cross references originating from the given address"""
+        return await ida_tasks.run(get_xrefs_from_sync, address, cursor)
 
     @tool()
     async def get_function_comment(
@@ -583,6 +975,64 @@ async def get_copilot_tools(model: Model):
         )
 
     @tool()
+    async def list_strings(
+        filter: ty.Annotated[
+            ty.Optional[str],
+            "Optional regex to filter string contents",
+        ] = None,
+        cursor: ty.Annotated[
+            ty.Optional[str], "Optional address cursor to continue from"
+        ] = None,
+    ) -> PagedResults[StringItem]:
+        """Returns a paginated list of strings from the current database"""
+        return await ida_tasks.run(list_strings_sync, filter, cursor)
+
+    @tool()
+    async def list_segments(
+        cursor: ty.Annotated[
+            ty.Optional[str], "Optional segment start address cursor"
+        ] = None,
+    ) -> PagedResults[Segment]:
+        """Returns a paginated list of memory segments"""
+        return await ida_tasks.run(list_segments_sync, cursor)
+
+    @tool()
+    async def list_imports(
+        cursor: ty.Annotated[ty.Optional[str], "Optional import cursor"] = None,
+    ) -> PagedResults[ImportedSymbol]:
+        """Returns a paginated list of imported symbols"""
+        return await ida_tasks.run(list_imports_sync, cursor)
+
+    @tool()
+    async def list_exports(
+        cursor: ty.Annotated[ty.Optional[str], "Optional export cursor"] = None,
+    ) -> PagedResults[ExportedSymbol]:
+        """Returns a paginated list of exported symbols"""
+        return await ida_tasks.run(list_exports_sync, cursor)
+
+    @tool()
+    async def read_data_at_address(
+        address: ty.Annotated[str, "Address to read bytes from"],
+        size: ty.Annotated[
+            int, "Maximum number of bytes to read (recommended: <= 64)"
+        ] = 64,
+    ) -> str:
+        """Returns hex dump and UTF-8 preview of bytes at the address (single read primitive)."""
+        return await ida_tasks.run(read_data_at_address_sync, address, size)
+
+    @tool()
+    async def get_current_address() -> Address:
+        """Returns the current cursor address"""
+        return await ida_tasks.run(get_current_address_sync)
+
+    @tool()
+    async def get_address_details(
+        address: ty.Annotated[str, "Address to inspect"],
+    ) -> AddressDetails:
+        """Returns a compact summary of an address, including name and segment"""
+        return await ida_tasks.run(get_address_details_sync, address)
+
+    @tool()
     async def get_bytes(
         address: ty.Annotated[str, "Start address in hex string"],
         size: ty.Annotated[int, "Number of bytes to read"],
@@ -593,16 +1043,27 @@ async def get_copilot_tools(model: Model):
     common_tools = [
         get_current_function,
         decompile_function,
+        disassemble_function,
+        get_current_address,
+        get_address_details,
     ]
 
     exploration_tools: list[ty.Any] = [
         get_symbol_address_by_name,
         list_functions,
         list_calling_functions,
+        list_called_functions,
+        get_xrefs_to,
+        get_xrefs_from,
+        list_strings,
+        list_segments,
+        list_imports,
+        list_exports,
         get_function_comment,
         get_local_types,
-        search_function_comments,
+        read_data_at_address,
         get_bytes,
+        search_function_comments,
     ]
 
     modification_tools = [

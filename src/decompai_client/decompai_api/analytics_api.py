@@ -56,7 +56,7 @@ class AnalyticsApi:
     ) -> TrackEventResponse:
         """Track Event
 
-        Track analytics event with server-side enrichment.  Returns:     - tracked=True: Event successfully forwarded to MixPanel     - tracked=False: MixPanel unavailable (event logged but not tracked)  Server-side enrichments:     - $insert_id: UUID for MixPanel deduplication     \"$name\": user's name     \"$email\": user's email,
+        Track analytics event with server-side enrichment.  Returns:     - tracked=True: Event successfully forwarded to MixPanel     - tracked=False: MixPanel unavailable (event logged but not tracked)
 
         :param track_event_request: (required)
         :type track_event_request: TrackEventRequest
@@ -124,7 +124,7 @@ class AnalyticsApi:
     ) -> ApiResponse[TrackEventResponse]:
         """Track Event
 
-        Track analytics event with server-side enrichment.  Returns:     - tracked=True: Event successfully forwarded to MixPanel     - tracked=False: MixPanel unavailable (event logged but not tracked)  Server-side enrichments:     - $insert_id: UUID for MixPanel deduplication     \"$name\": user's name     \"$email\": user's email,
+        Track analytics event with server-side enrichment.  Returns:     - tracked=True: Event successfully forwarded to MixPanel     - tracked=False: MixPanel unavailable (event logged but not tracked)
 
         :param track_event_request: (required)
         :type track_event_request: TrackEventRequest
@@ -192,7 +192,7 @@ class AnalyticsApi:
     ) -> RESTResponseType:
         """Track Event
 
-        Track analytics event with server-side enrichment.  Returns:     - tracked=True: Event successfully forwarded to MixPanel     - tracked=False: MixPanel unavailable (event logged but not tracked)  Server-side enrichments:     - $insert_id: UUID for MixPanel deduplication     \"$name\": user's name     \"$email\": user's email,
+        Track analytics event with server-side enrichment.  Returns:     - tracked=True: Event successfully forwarded to MixPanel     - tracked=False: MixPanel unavailable (event logged but not tracked)
 
         :param track_event_request: (required)
         :type track_event_request: TrackEventRequest

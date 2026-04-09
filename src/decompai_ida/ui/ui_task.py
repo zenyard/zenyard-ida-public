@@ -4,7 +4,15 @@ from contextlib import asynccontextmanager
 import anyio
 from qtpy.QtWidgets import QApplication, QMainWindow
 
+from decompai_client import (
+    AnalysisAcceptedEvent,
+    AnalysisSource,
+    AnalysisType,
+    QuotaExhaustedDialogShownEvent,
+    QuotaExhaustedDialogShownReason,
+)
 from decompai_ida import ida_tasks, logger, messages
+from decompai_ida.analytics_task import analytics_timestamp
 from decompai_ida.apply_inferences_task import ApplyInferencesTask
 from decompai_ida.ask_initial_questions_task import ShowInitialQuestionsTask
 from decompai_ida.queue_revisions_task import QueueRevisionsTask
@@ -73,6 +81,17 @@ class UiTask(Task):
             self._ctx.model.runtime_status.queue_foreground_task_if_not_already_queued(
                 QueueRevisionsTask()
             )
+            binary_id = await self._ctx.model.binary_id.get()
+            if binary_id is not None:
+                self._ctx.emit_analytics_event(
+                    AnalysisAcceptedEvent(
+                        timestamp=analytics_timestamp(),
+                        binary_id=binary_id,
+                        start_source=AnalysisSource.TOOLBAR_ICON_REQUEST,
+                        analysis_type=AnalysisType.CHANGES_DETECTED,
+                        user_prompt=False,
+                    )
+                )
         else:
             self._ctx.model.runtime_status.queue_foreground_task_if_not_already_queued(
                 ShowInitialQuestionsTask()
@@ -88,7 +107,14 @@ class UiTask(Task):
 
     async def _on_usage_clicked(self):
         """Handle click on usage label - show binary paused dialog."""
-        await messages.warn_plan_ended()
+        user_response = await messages.warn_plan_ended()
+        self._ctx.emit_analytics_event(
+            QuotaExhaustedDialogShownEvent(
+                timestamp=analytics_timestamp(),
+                user_response=user_response,
+                show_reason=QuotaExhaustedDialogShownReason.USAGE_LABEL_CLICKED,
+            )
+        )
 
 
 def _find_main_window() -> QMainWindow:

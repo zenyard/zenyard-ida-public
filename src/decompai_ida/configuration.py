@@ -1,6 +1,8 @@
 import typing as ty
+from dataclasses import dataclass
 from inspect import cleandoc
 from pathlib import Path
+import uuid
 
 import ida_diskio
 import ida_kernwin
@@ -58,6 +60,10 @@ class PluginConfiguration(BaseModel, frozen=True):
 
     # Kept here so we don't override value from installer
     accepted_eula_version: ty.Optional[int] = None
+
+    install_id: ty.Optional[str] = None
+
+    disable_analytics: bool = False
 
     def with_user_config(
         self,
@@ -134,6 +140,34 @@ def show_configuration_dialog_sync() -> bool:
 
     _write_configuration(new_config)
     return True
+
+
+@dataclass(frozen=True)
+class SetupAnalyticsConfigResult:
+    install_id: str
+    analytics_disabled: bool
+    is_first_install: bool
+
+
+def setup_analytics_config_sync() -> SetupAnalyticsConfigResult:
+
+    current = read_configuration_sync()
+    updates: dict[str, ty.Any] = {}
+
+    is_first_install = current.install_id is None
+    if is_first_install:
+        updates["install_id"] = str(uuid.uuid4())
+
+    if updates:
+        current = current.model_copy(update=updates)
+        _write_configuration(current)
+
+    assert current.install_id is not None
+    return SetupAnalyticsConfigResult(
+        install_id=current.install_id,
+        analytics_disabled=current.disable_analytics,
+        is_first_install=is_first_install,
+    )
 
 
 def update_configuration_sync(updates: dict[str, ty.Any]):

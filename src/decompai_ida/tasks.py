@@ -12,6 +12,7 @@ from decompai_ida import api, logger
 from decompai_ida.broadcast import Broadcast
 from decompai_ida.configuration import BadConfigurationFile, PluginConfiguration
 from decompai_ida.events import IdaEvent
+from decompai_ida.ida_tasks import AsyncCallback
 from decompai_ida.model import CopilotModel, Model
 from decompai_ida.wait_box import WaitBox
 
@@ -43,6 +44,10 @@ class GlobalTaskContext:
     """
 
     ida_events: Broadcast[IdaEvent]
+    analytics_events: Broadcast[ty.Any]
+    install_id: str
+    is_first_install: bool
+    disable_analytics: bool
     static_config: StaticConfiguration
     api_client: ApiClient
 
@@ -56,6 +61,7 @@ class TaskContext:
     model: Model
     copilot_model: CopilotModel
     ida_events: Broadcast[IdaEvent]
+    emit_analytics_event: AsyncCallback
     binaries_api: BinariesApi
     user_api: UserApi
     plugin_config: PluginConfiguration

@@ -24,17 +24,16 @@ from decompai_client.models.analysis_type import AnalysisType
 from typing import Optional, Set
 from typing_extensions import Self
 
-class AnalysisAcceptedEvent(BaseModel):
+class AnalysisStartEvent(BaseModel):
     """
     Fired when analysis is started.
     """ # noqa: E501
-    event_type: Optional[StrictStr] = 'Analysis - Accepted'
+    event_type: Optional[StrictStr] = 'Analysis - Start'
     timestamp: StrictInt
-    binary_id: StrictStr
     start_source: AnalysisSource
     analysis_type: Optional[AnalysisType]
     user_prompt: StrictBool
-    __properties: ClassVar[List[str]] = ["event_type", "timestamp", "binary_id", "start_source", "analysis_type", "user_prompt"]
+    __properties: ClassVar[List[str]] = ["event_type", "timestamp", "start_source", "analysis_type", "user_prompt"]
 
     @field_validator('event_type')
     def event_type_validate_enum(cls, value):
@@ -42,8 +41,8 @@ class AnalysisAcceptedEvent(BaseModel):
         if value is None:
             return value
 
-        if value not in set(['Analysis - Accepted']):
-            raise ValueError("must be one of enum values ('Analysis - Accepted')")
+        if value not in set(['Analysis - Start']):
+            raise ValueError("must be one of enum values ('Analysis - Start')")
         return value
 
     model_config = ConfigDict(
@@ -64,7 +63,7 @@ class AnalysisAcceptedEvent(BaseModel):
 
     @classmethod
     def from_json(cls, json_str: str) -> Optional[Self]:
-        """Create an instance of AnalysisAcceptedEvent from a JSON string"""
+        """Create an instance of AnalysisStartEvent from a JSON string"""
         return cls.from_dict(json.loads(json_str))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -94,7 +93,7 @@ class AnalysisAcceptedEvent(BaseModel):
 
     @classmethod
     def from_dict(cls, obj: Optional[Dict[str, Any]]) -> Optional[Self]:
-        """Create an instance of AnalysisAcceptedEvent from a dict"""
+        """Create an instance of AnalysisStartEvent from a dict"""
         if obj is None:
             return None
 
@@ -102,9 +101,8 @@ class AnalysisAcceptedEvent(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "event_type": obj.get("event_type") if obj.get("event_type") is not None else 'Analysis - Accepted',
+            "event_type": obj.get("event_type") if obj.get("event_type") is not None else 'Analysis - Start',
             "timestamp": obj.get("timestamp"),
-            "binary_id": obj.get("binary_id"),
             "start_source": obj.get("start_source"),
             "analysis_type": obj.get("analysis_type"),
             "user_prompt": obj.get("user_prompt")

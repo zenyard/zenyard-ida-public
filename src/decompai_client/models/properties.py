@@ -17,57 +17,63 @@ import json
 import pprint
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError, field_validator
 from typing import Any, List, Optional
-from decompai_client.models.analysis_accepted_event import AnalysisAcceptedEvent
+from decompai_client.models.analysis_complete_event import AnalysisCompleteEvent
+from decompai_client.models.analysis_start_event import AnalysisStartEvent
 from decompai_client.models.copilot_clear_requested_event import CopilotClearRequestedEvent
+from decompai_client.models.copilot_close_event import CopilotCloseEvent
 from decompai_client.models.copilot_message_sent_event import CopilotMessageSentEvent
 from decompai_client.models.copilot_open_event import CopilotOpenEvent
 from decompai_client.models.copilot_stop_requested_event import CopilotStopRequestedEvent
 from decompai_client.models.database_opened_event import DatabaseOpenedEvent
 from decompai_client.models.initial_analysis_dismissed_event import InitialAnalysisDismissedEvent
+from decompai_client.models.plugin_install_success_event import PluginInstallSuccessEvent
 from decompai_client.models.plugin_loaded_event import PluginLoadedEvent
 from decompai_client.models.quota_exhausted_dialog_shown_event import QuotaExhaustedDialogShownEvent
+from decompai_client.models.quota_exhausted_event import QuotaExhaustedEvent
 from decompai_client.models.swift_glow_close_event import SwiftGlowCloseEvent
-from decompai_client.models.swift_glow_jump_from_line_event import SwiftGlowJumpFromLineEvent
-from decompai_client.models.swift_glow_jump_to_line_event import SwiftGlowJumpToLineEvent
 from decompai_client.models.swift_glow_open_event import SwiftGlowOpenEvent
 from pydantic import StrictStr, Field
 from typing import Union, List, Set, Optional, Dict
 from typing_extensions import Literal, Self
 
-EVENT_ONE_OF_SCHEMAS = ["AnalysisAcceptedEvent", "CopilotClearRequestedEvent", "CopilotMessageSentEvent", "CopilotOpenEvent", "CopilotStopRequestedEvent", "DatabaseOpenedEvent", "InitialAnalysisDismissedEvent", "PluginLoadedEvent", "QuotaExhaustedDialogShownEvent", "SwiftGlowCloseEvent", "SwiftGlowJumpFromLineEvent", "SwiftGlowJumpToLineEvent", "SwiftGlowOpenEvent"]
+PROPERTIES_ONE_OF_SCHEMAS = ["AnalysisCompleteEvent", "AnalysisStartEvent", "CopilotClearRequestedEvent", "CopilotCloseEvent", "CopilotMessageSentEvent", "CopilotOpenEvent", "CopilotStopRequestedEvent", "DatabaseOpenedEvent", "InitialAnalysisDismissedEvent", "PluginInstallSuccessEvent", "PluginLoadedEvent", "QuotaExhaustedDialogShownEvent", "QuotaExhaustedEvent", "SwiftGlowCloseEvent", "SwiftGlowOpenEvent"]
 
-class Event(BaseModel):
+class Properties(BaseModel):
     """
-    Event
+    Properties
     """
     # data type: DatabaseOpenedEvent
     oneof_schema_1_validator: Optional[DatabaseOpenedEvent] = None
     # data type: PluginLoadedEvent
     oneof_schema_2_validator: Optional[PluginLoadedEvent] = None
-    # data type: AnalysisAcceptedEvent
-    oneof_schema_3_validator: Optional[AnalysisAcceptedEvent] = None
+    # data type: PluginInstallSuccessEvent
+    oneof_schema_3_validator: Optional[PluginInstallSuccessEvent] = None
+    # data type: AnalysisStartEvent
+    oneof_schema_4_validator: Optional[AnalysisStartEvent] = None
+    # data type: AnalysisCompleteEvent
+    oneof_schema_5_validator: Optional[AnalysisCompleteEvent] = None
     # data type: InitialAnalysisDismissedEvent
-    oneof_schema_4_validator: Optional[InitialAnalysisDismissedEvent] = None
+    oneof_schema_6_validator: Optional[InitialAnalysisDismissedEvent] = None
     # data type: CopilotOpenEvent
-    oneof_schema_5_validator: Optional[CopilotOpenEvent] = None
+    oneof_schema_7_validator: Optional[CopilotOpenEvent] = None
+    # data type: CopilotCloseEvent
+    oneof_schema_8_validator: Optional[CopilotCloseEvent] = None
     # data type: CopilotMessageSentEvent
-    oneof_schema_6_validator: Optional[CopilotMessageSentEvent] = None
+    oneof_schema_9_validator: Optional[CopilotMessageSentEvent] = None
     # data type: CopilotClearRequestedEvent
-    oneof_schema_7_validator: Optional[CopilotClearRequestedEvent] = None
+    oneof_schema_10_validator: Optional[CopilotClearRequestedEvent] = None
     # data type: CopilotStopRequestedEvent
-    oneof_schema_8_validator: Optional[CopilotStopRequestedEvent] = None
+    oneof_schema_11_validator: Optional[CopilotStopRequestedEvent] = None
     # data type: SwiftGlowOpenEvent
-    oneof_schema_9_validator: Optional[SwiftGlowOpenEvent] = None
-    # data type: SwiftGlowJumpToLineEvent
-    oneof_schema_10_validator: Optional[SwiftGlowJumpToLineEvent] = None
-    # data type: SwiftGlowJumpFromLineEvent
-    oneof_schema_11_validator: Optional[SwiftGlowJumpFromLineEvent] = None
+    oneof_schema_12_validator: Optional[SwiftGlowOpenEvent] = None
     # data type: SwiftGlowCloseEvent
-    oneof_schema_12_validator: Optional[SwiftGlowCloseEvent] = None
+    oneof_schema_13_validator: Optional[SwiftGlowCloseEvent] = None
+    # data type: QuotaExhaustedEvent
+    oneof_schema_14_validator: Optional[QuotaExhaustedEvent] = None
     # data type: QuotaExhaustedDialogShownEvent
-    oneof_schema_13_validator: Optional[QuotaExhaustedDialogShownEvent] = None
-    actual_instance: Optional[Union[AnalysisAcceptedEvent, CopilotClearRequestedEvent, CopilotMessageSentEvent, CopilotOpenEvent, CopilotStopRequestedEvent, DatabaseOpenedEvent, InitialAnalysisDismissedEvent, PluginLoadedEvent, QuotaExhaustedDialogShownEvent, SwiftGlowCloseEvent, SwiftGlowJumpFromLineEvent, SwiftGlowJumpToLineEvent, SwiftGlowOpenEvent]] = None
-    one_of_schemas: Set[str] = { "AnalysisAcceptedEvent", "CopilotClearRequestedEvent", "CopilotMessageSentEvent", "CopilotOpenEvent", "CopilotStopRequestedEvent", "DatabaseOpenedEvent", "InitialAnalysisDismissedEvent", "PluginLoadedEvent", "QuotaExhaustedDialogShownEvent", "SwiftGlowCloseEvent", "SwiftGlowJumpFromLineEvent", "SwiftGlowJumpToLineEvent", "SwiftGlowOpenEvent" }
+    oneof_schema_15_validator: Optional[QuotaExhaustedDialogShownEvent] = None
+    actual_instance: Optional[Union[AnalysisCompleteEvent, AnalysisStartEvent, CopilotClearRequestedEvent, CopilotCloseEvent, CopilotMessageSentEvent, CopilotOpenEvent, CopilotStopRequestedEvent, DatabaseOpenedEvent, InitialAnalysisDismissedEvent, PluginInstallSuccessEvent, PluginLoadedEvent, QuotaExhaustedDialogShownEvent, QuotaExhaustedEvent, SwiftGlowCloseEvent, SwiftGlowOpenEvent]] = None
+    one_of_schemas: Set[str] = { "AnalysisCompleteEvent", "AnalysisStartEvent", "CopilotClearRequestedEvent", "CopilotCloseEvent", "CopilotMessageSentEvent", "CopilotOpenEvent", "CopilotStopRequestedEvent", "DatabaseOpenedEvent", "InitialAnalysisDismissedEvent", "PluginInstallSuccessEvent", "PluginLoadedEvent", "QuotaExhaustedDialogShownEvent", "QuotaExhaustedEvent", "SwiftGlowCloseEvent", "SwiftGlowOpenEvent" }
 
     model_config = ConfigDict(
         validate_assignment=True,
@@ -90,7 +96,7 @@ class Event(BaseModel):
 
     @field_validator('actual_instance')
     def actual_instance_must_validate_oneof(cls, v):
-        instance = Event.model_construct()
+        instance = Properties.model_construct()
         error_messages = []
         match = 0
         # validate data type: DatabaseOpenedEvent
@@ -103,9 +109,19 @@ class Event(BaseModel):
             error_messages.append(f"Error! Input type `{type(v)}` is not `PluginLoadedEvent`")
         else:
             match += 1
-        # validate data type: AnalysisAcceptedEvent
-        if not isinstance(v, AnalysisAcceptedEvent):
-            error_messages.append(f"Error! Input type `{type(v)}` is not `AnalysisAcceptedEvent`")
+        # validate data type: PluginInstallSuccessEvent
+        if not isinstance(v, PluginInstallSuccessEvent):
+            error_messages.append(f"Error! Input type `{type(v)}` is not `PluginInstallSuccessEvent`")
+        else:
+            match += 1
+        # validate data type: AnalysisStartEvent
+        if not isinstance(v, AnalysisStartEvent):
+            error_messages.append(f"Error! Input type `{type(v)}` is not `AnalysisStartEvent`")
+        else:
+            match += 1
+        # validate data type: AnalysisCompleteEvent
+        if not isinstance(v, AnalysisCompleteEvent):
+            error_messages.append(f"Error! Input type `{type(v)}` is not `AnalysisCompleteEvent`")
         else:
             match += 1
         # validate data type: InitialAnalysisDismissedEvent
@@ -116,6 +132,11 @@ class Event(BaseModel):
         # validate data type: CopilotOpenEvent
         if not isinstance(v, CopilotOpenEvent):
             error_messages.append(f"Error! Input type `{type(v)}` is not `CopilotOpenEvent`")
+        else:
+            match += 1
+        # validate data type: CopilotCloseEvent
+        if not isinstance(v, CopilotCloseEvent):
+            error_messages.append(f"Error! Input type `{type(v)}` is not `CopilotCloseEvent`")
         else:
             match += 1
         # validate data type: CopilotMessageSentEvent
@@ -138,19 +159,14 @@ class Event(BaseModel):
             error_messages.append(f"Error! Input type `{type(v)}` is not `SwiftGlowOpenEvent`")
         else:
             match += 1
-        # validate data type: SwiftGlowJumpToLineEvent
-        if not isinstance(v, SwiftGlowJumpToLineEvent):
-            error_messages.append(f"Error! Input type `{type(v)}` is not `SwiftGlowJumpToLineEvent`")
-        else:
-            match += 1
-        # validate data type: SwiftGlowJumpFromLineEvent
-        if not isinstance(v, SwiftGlowJumpFromLineEvent):
-            error_messages.append(f"Error! Input type `{type(v)}` is not `SwiftGlowJumpFromLineEvent`")
-        else:
-            match += 1
         # validate data type: SwiftGlowCloseEvent
         if not isinstance(v, SwiftGlowCloseEvent):
             error_messages.append(f"Error! Input type `{type(v)}` is not `SwiftGlowCloseEvent`")
+        else:
+            match += 1
+        # validate data type: QuotaExhaustedEvent
+        if not isinstance(v, QuotaExhaustedEvent):
+            error_messages.append(f"Error! Input type `{type(v)}` is not `QuotaExhaustedEvent`")
         else:
             match += 1
         # validate data type: QuotaExhaustedDialogShownEvent
@@ -160,10 +176,10 @@ class Event(BaseModel):
             match += 1
         if match > 1:
             # more than 1 match
-            raise ValueError("Multiple matches found when setting `actual_instance` in Event with oneOf schemas: AnalysisAcceptedEvent, CopilotClearRequestedEvent, CopilotMessageSentEvent, CopilotOpenEvent, CopilotStopRequestedEvent, DatabaseOpenedEvent, InitialAnalysisDismissedEvent, PluginLoadedEvent, QuotaExhaustedDialogShownEvent, SwiftGlowCloseEvent, SwiftGlowJumpFromLineEvent, SwiftGlowJumpToLineEvent, SwiftGlowOpenEvent. Details: " + ", ".join(error_messages))
+            raise ValueError("Multiple matches found when setting `actual_instance` in Properties with oneOf schemas: AnalysisCompleteEvent, AnalysisStartEvent, CopilotClearRequestedEvent, CopilotCloseEvent, CopilotMessageSentEvent, CopilotOpenEvent, CopilotStopRequestedEvent, DatabaseOpenedEvent, InitialAnalysisDismissedEvent, PluginInstallSuccessEvent, PluginLoadedEvent, QuotaExhaustedDialogShownEvent, QuotaExhaustedEvent, SwiftGlowCloseEvent, SwiftGlowOpenEvent. Details: " + ", ".join(error_messages))
         elif match == 0:
             # no match
-            raise ValueError("No match found when setting `actual_instance` in Event with oneOf schemas: AnalysisAcceptedEvent, CopilotClearRequestedEvent, CopilotMessageSentEvent, CopilotOpenEvent, CopilotStopRequestedEvent, DatabaseOpenedEvent, InitialAnalysisDismissedEvent, PluginLoadedEvent, QuotaExhaustedDialogShownEvent, SwiftGlowCloseEvent, SwiftGlowJumpFromLineEvent, SwiftGlowJumpToLineEvent, SwiftGlowOpenEvent. Details: " + ", ".join(error_messages))
+            raise ValueError("No match found when setting `actual_instance` in Properties with oneOf schemas: AnalysisCompleteEvent, AnalysisStartEvent, CopilotClearRequestedEvent, CopilotCloseEvent, CopilotMessageSentEvent, CopilotOpenEvent, CopilotStopRequestedEvent, DatabaseOpenedEvent, InitialAnalysisDismissedEvent, PluginInstallSuccessEvent, PluginLoadedEvent, QuotaExhaustedDialogShownEvent, QuotaExhaustedEvent, SwiftGlowCloseEvent, SwiftGlowOpenEvent. Details: " + ", ".join(error_messages))
         else:
             return v
 
@@ -190,9 +206,21 @@ class Event(BaseModel):
             match += 1
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
-        # deserialize data into AnalysisAcceptedEvent
+        # deserialize data into PluginInstallSuccessEvent
         try:
-            instance.actual_instance = AnalysisAcceptedEvent.from_json(json_str)
+            instance.actual_instance = PluginInstallSuccessEvent.from_json(json_str)
+            match += 1
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
+        # deserialize data into AnalysisStartEvent
+        try:
+            instance.actual_instance = AnalysisStartEvent.from_json(json_str)
+            match += 1
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
+        # deserialize data into AnalysisCompleteEvent
+        try:
+            instance.actual_instance = AnalysisCompleteEvent.from_json(json_str)
             match += 1
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
@@ -205,6 +233,12 @@ class Event(BaseModel):
         # deserialize data into CopilotOpenEvent
         try:
             instance.actual_instance = CopilotOpenEvent.from_json(json_str)
+            match += 1
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
+        # deserialize data into CopilotCloseEvent
+        try:
+            instance.actual_instance = CopilotCloseEvent.from_json(json_str)
             match += 1
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
@@ -232,21 +266,15 @@ class Event(BaseModel):
             match += 1
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
-        # deserialize data into SwiftGlowJumpToLineEvent
-        try:
-            instance.actual_instance = SwiftGlowJumpToLineEvent.from_json(json_str)
-            match += 1
-        except (ValidationError, ValueError) as e:
-            error_messages.append(str(e))
-        # deserialize data into SwiftGlowJumpFromLineEvent
-        try:
-            instance.actual_instance = SwiftGlowJumpFromLineEvent.from_json(json_str)
-            match += 1
-        except (ValidationError, ValueError) as e:
-            error_messages.append(str(e))
         # deserialize data into SwiftGlowCloseEvent
         try:
             instance.actual_instance = SwiftGlowCloseEvent.from_json(json_str)
+            match += 1
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
+        # deserialize data into QuotaExhaustedEvent
+        try:
+            instance.actual_instance = QuotaExhaustedEvent.from_json(json_str)
             match += 1
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
@@ -259,10 +287,10 @@ class Event(BaseModel):
 
         if match > 1:
             # more than 1 match
-            raise ValueError("Multiple matches found when deserializing the JSON string into Event with oneOf schemas: AnalysisAcceptedEvent, CopilotClearRequestedEvent, CopilotMessageSentEvent, CopilotOpenEvent, CopilotStopRequestedEvent, DatabaseOpenedEvent, InitialAnalysisDismissedEvent, PluginLoadedEvent, QuotaExhaustedDialogShownEvent, SwiftGlowCloseEvent, SwiftGlowJumpFromLineEvent, SwiftGlowJumpToLineEvent, SwiftGlowOpenEvent. Details: " + ", ".join(error_messages))
+            raise ValueError("Multiple matches found when deserializing the JSON string into Properties with oneOf schemas: AnalysisCompleteEvent, AnalysisStartEvent, CopilotClearRequestedEvent, CopilotCloseEvent, CopilotMessageSentEvent, CopilotOpenEvent, CopilotStopRequestedEvent, DatabaseOpenedEvent, InitialAnalysisDismissedEvent, PluginInstallSuccessEvent, PluginLoadedEvent, QuotaExhaustedDialogShownEvent, QuotaExhaustedEvent, SwiftGlowCloseEvent, SwiftGlowOpenEvent. Details: " + ", ".join(error_messages))
         elif match == 0:
             # no match
-            raise ValueError("No match found when deserializing the JSON string into Event with oneOf schemas: AnalysisAcceptedEvent, CopilotClearRequestedEvent, CopilotMessageSentEvent, CopilotOpenEvent, CopilotStopRequestedEvent, DatabaseOpenedEvent, InitialAnalysisDismissedEvent, PluginLoadedEvent, QuotaExhaustedDialogShownEvent, SwiftGlowCloseEvent, SwiftGlowJumpFromLineEvent, SwiftGlowJumpToLineEvent, SwiftGlowOpenEvent. Details: " + ", ".join(error_messages))
+            raise ValueError("No match found when deserializing the JSON string into Properties with oneOf schemas: AnalysisCompleteEvent, AnalysisStartEvent, CopilotClearRequestedEvent, CopilotCloseEvent, CopilotMessageSentEvent, CopilotOpenEvent, CopilotStopRequestedEvent, DatabaseOpenedEvent, InitialAnalysisDismissedEvent, PluginInstallSuccessEvent, PluginLoadedEvent, QuotaExhaustedDialogShownEvent, QuotaExhaustedEvent, SwiftGlowCloseEvent, SwiftGlowOpenEvent. Details: " + ", ".join(error_messages))
         else:
             return instance
 
@@ -276,7 +304,7 @@ class Event(BaseModel):
         else:
             return json.dumps(self.actual_instance)
 
-    def to_dict(self) -> Optional[Union[Dict[str, Any], AnalysisAcceptedEvent, CopilotClearRequestedEvent, CopilotMessageSentEvent, CopilotOpenEvent, CopilotStopRequestedEvent, DatabaseOpenedEvent, InitialAnalysisDismissedEvent, PluginLoadedEvent, QuotaExhaustedDialogShownEvent, SwiftGlowCloseEvent, SwiftGlowJumpFromLineEvent, SwiftGlowJumpToLineEvent, SwiftGlowOpenEvent]]:
+    def to_dict(self) -> Optional[Union[Dict[str, Any], AnalysisCompleteEvent, AnalysisStartEvent, CopilotClearRequestedEvent, CopilotCloseEvent, CopilotMessageSentEvent, CopilotOpenEvent, CopilotStopRequestedEvent, DatabaseOpenedEvent, InitialAnalysisDismissedEvent, PluginInstallSuccessEvent, PluginLoadedEvent, QuotaExhaustedDialogShownEvent, QuotaExhaustedEvent, SwiftGlowCloseEvent, SwiftGlowOpenEvent]]:
         """Returns the dict representation of the actual instance"""
         if self.actual_instance is None:
             return None

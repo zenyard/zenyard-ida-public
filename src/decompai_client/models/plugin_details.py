@@ -17,34 +17,26 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt, StrictStr, field_validator
+from pydantic import BaseModel, ConfigDict, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
-from decompai_client.models.analysis_source import AnalysisSource
-from decompai_client.models.analysis_type import AnalysisType
+from decompai_client.models.quota import Quota
 from typing import Optional, Set
 from typing_extensions import Self
 
-class AnalysisAcceptedEvent(BaseModel):
+class PluginDetails(BaseModel):
     """
-    Fired when analysis is started.
+    Complete environment details sent with every event.
     """ # noqa: E501
-    event_type: Optional[StrictStr] = 'Analysis - Accepted'
-    timestamp: StrictInt
-    binary_id: StrictStr
-    start_source: AnalysisSource
-    analysis_type: Optional[AnalysisType]
-    user_prompt: StrictBool
-    __properties: ClassVar[List[str]] = ["event_type", "timestamp", "binary_id", "start_source", "analysis_type", "user_prompt"]
-
-    @field_validator('event_type')
-    def event_type_validate_enum(cls, value):
-        """Validates the enum"""
-        if value is None:
-            return value
-
-        if value not in set(['Analysis - Accepted']):
-            raise ValueError("must be one of enum values ('Analysis - Accepted')")
-        return value
+    uid: StrictStr
+    quota: Quota
+    decompiler: StrictStr
+    decompiler_version: StrictStr
+    os_type: StrictStr
+    os_version: Optional[StrictStr]
+    plugin_version: StrictStr
+    install_id: StrictStr
+    session_id: StrictStr
+    __properties: ClassVar[List[str]] = ["uid", "quota", "decompiler", "decompiler_version", "os_type", "os_version", "plugin_version", "install_id", "session_id"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -64,7 +56,7 @@ class AnalysisAcceptedEvent(BaseModel):
 
     @classmethod
     def from_json(cls, json_str: str) -> Optional[Self]:
-        """Create an instance of AnalysisAcceptedEvent from a JSON string"""
+        """Create an instance of PluginDetails from a JSON string"""
         return cls.from_dict(json.loads(json_str))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -85,16 +77,19 @@ class AnalysisAcceptedEvent(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
-        # set to None if analysis_type (nullable) is None
+        # override the default output from pydantic by calling `to_dict()` of quota
+        if self.quota:
+            _dict['quota'] = self.quota.to_dict()
+        # set to None if os_version (nullable) is None
         # and model_fields_set contains the field
-        if self.analysis_type is None and "analysis_type" in self.model_fields_set:
-            _dict['analysis_type'] = None
+        if self.os_version is None and "os_version" in self.model_fields_set:
+            _dict['os_version'] = None
 
         return _dict
 
     @classmethod
     def from_dict(cls, obj: Optional[Dict[str, Any]]) -> Optional[Self]:
-        """Create an instance of AnalysisAcceptedEvent from a dict"""
+        """Create an instance of PluginDetails from a dict"""
         if obj is None:
             return None
 
@@ -102,12 +97,15 @@ class AnalysisAcceptedEvent(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "event_type": obj.get("event_type") if obj.get("event_type") is not None else 'Analysis - Accepted',
-            "timestamp": obj.get("timestamp"),
-            "binary_id": obj.get("binary_id"),
-            "start_source": obj.get("start_source"),
-            "analysis_type": obj.get("analysis_type"),
-            "user_prompt": obj.get("user_prompt")
+            "uid": obj.get("uid"),
+            "quota": Quota.from_dict(obj["quota"]) if obj.get("quota") is not None else None,
+            "decompiler": obj.get("decompiler"),
+            "decompiler_version": obj.get("decompiler_version"),
+            "os_type": obj.get("os_type"),
+            "os_version": obj.get("os_version"),
+            "plugin_version": obj.get("plugin_version"),
+            "install_id": obj.get("install_id"),
+            "session_id": obj.get("session_id")
         })
         return _obj
 

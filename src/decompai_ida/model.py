@@ -294,6 +294,9 @@ class Model:
         self.pending_inference_counts = storage.SingleValue(
             "pending_inference_counts", dict[str, int], default={}
         )
+        self.copilot_session_notes = storage.SingleValue(
+            "copilot_session_notes", ty.Optional[str], default=None
+        )
 
         # Type management storage
         # Maps struct_id -> StructDefinition
@@ -448,3 +451,4 @@ class Model:
         await self.registered_struct_names.clear()
         await self.function_original_type_annotations.clear()
         await self.pending_inference_counts.set({})
+        await self.copilot_session_notes.clear()

@@ -9,7 +9,14 @@ import typing as ty
 
 
 from decompai_client import LineMapping
+from decompai_client.models import (
+    SwiftGlowJumpToLineEvent,
+    SwiftGlowMenuType,
+    SwiftGlowOpenEvent,
+)
 from decompai_ida import ida_tasks, logger, messages, lines
+from decompai_ida.analytics_task import analytics_timestamp
+from decompai_ida.ida_tasks import AsyncCallback
 from decompai_ida.async_utils import wait_until_cancelled
 from decompai_ida.model import Model
 from decompai_ida.swift_utils import (
@@ -45,16 +52,19 @@ class OpenSwiftActionHandler(ida_kernwin.action_handler_t):
     _swiftglow_enabled: bool
     _model: Model
     _shared_swift_viewer: ty.Optional[SwiftCodeViewer]
+    _emit_analytics_event: AsyncCallback
 
     def __init__(
         self,
         swiftglow_enabled: bool,
         model: Model,
+        emit_analytics_event: AsyncCallback,
     ):
         super().__init__()
         self._swiftglow_enabled = swiftglow_enabled
         self._model = model
         self._shared_swift_viewer = None
+        self._emit_analytics_event = emit_analytics_event
 
     def activate(self, ctx):  # type: ignore
         """Handle action activation - open swift glow window."""
@@ -76,13 +86,27 @@ class OpenSwiftActionHandler(ida_kernwin.action_handler_t):
                 return 1
 
             action_id = getattr(ctx, "action", None)
-            if action_id == OPEN_SWIFT_GLOW_NEW_TAB_ACTION_ID:
+            is_new_tab = action_id == OPEN_SWIFT_GLOW_NEW_TAB_ACTION_ID
+            if is_new_tab:
                 viewer = self._get_new_tab_viewer()
             else:
                 viewer = self._get_reused_viewer()
 
             if viewer is None:
                 return 1
+
+            # Emit analytics event for new window opens
+            menu_type = (
+                SwiftGlowMenuType.NEW_TAB_MENU
+                if is_new_tab
+                else SwiftGlowMenuType.MAIN_MENU
+            )
+            self._emit_analytics_event(
+                SwiftGlowOpenEvent(
+                    timestamp=analytics_timestamp(),
+                    open_source=menu_type,
+                )
+            )
 
             viewer.update_content(
                 start_ea=ctx.cur_func.start_ea,
@@ -117,7 +141,9 @@ class OpenSwiftActionHandler(ida_kernwin.action_handler_t):
         viewer = self._shared_swift_viewer
         if viewer is None or not self._is_viewer_available(viewer):
             self._shared_swift_viewer = None
-            viewer = create_swift_viewer(title=SWIFT_GLOW_TITLE)
+            viewer = create_swift_viewer(
+                title=SWIFT_GLOW_TITLE,
+            )
             if viewer is None:
                 return None
             self._shared_swift_viewer = viewer
@@ -129,7 +155,9 @@ class OpenSwiftActionHandler(ida_kernwin.action_handler_t):
             if ida_kernwin.find_widget(title) is not None:
                 continue
 
-            swift_viewer = create_swift_viewer(title=title)
+            swift_viewer = create_swift_viewer(
+                title=title,
+            )
             if swift_viewer is None:
                 return None
 
@@ -149,9 +177,14 @@ class OpenSwiftActionHandler(ida_kernwin.action_handler_t):
 class JumpToPseudocodeActionHandler(ida_kernwin.action_handler_t):
     """Action handler for jumping from swift code to pseudocode."""
 
-    def __init__(self, model: Model):
+    def __init__(
+        self,
+        model: Model,
+        emit_analytics_event: AsyncCallback,
+    ):
         super().__init__()
         self._model = model
+        self._emit_analytics_event = emit_analytics_event
 
     def activate(self, ctx):  # type: ignore
         address = _get_func_address_from_action_context(ctx)
@@ -188,6 +221,14 @@ class JumpToPseudocodeActionHandler(ida_kernwin.action_handler_t):
             )
         )
         _jump_to_pseudocode_line_number(vdui, pseudocode_line_number)
+
+        self._emit_analytics_event(
+            SwiftGlowJumpToLineEvent(
+                timestamp=analytics_timestamp(),
+                swift_line=swift_line_number,
+                c_line=pseudocode_line_number,
+            )
+        )
 
     def update(self, ctx):  # type: ignore
         """Update action state - enable only when database is open."""
@@ -274,7 +315,9 @@ class SwiftUiTask(Task):
 
         # Create action handlers
         self._open_swift_action_handler = OpenSwiftActionHandler(
-            swiftglow_enabled, self._ctx.model
+            swiftglow_enabled,
+            self._ctx.model,
+            emit_analytics_event=self._ctx.emit_analytics_event,
         )
 
         async with (
@@ -314,7 +357,10 @@ class SwiftUiTask(Task):
                 return
 
             self._jump_to_pseudocode_action_handler = (
-                JumpToPseudocodeActionHandler(self._ctx.model)
+                JumpToPseudocodeActionHandler(
+                    self._ctx.model,
+                    emit_analytics_event=self._ctx.emit_analytics_event,
+                )
             )
 
             await ida_tasks.run_ui(

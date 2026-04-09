@@ -21,7 +21,9 @@ from decompai_ida.apply_pending_inferences_task import (
     ApplyPendingInferencesTask,
 )
 from decompai_ida.async_utils import wait_for_object_of_type
-from decompai_ida.broadcast import Broadcast
+
+from decompai_ida.analytics_task import AnalyticsTask
+from decompai_ida.broadcast import Broadcast, RecordLatestN
 from decompai_ida.broadcast_ida_events_task import (
     BroadcastHexRaysEventsTask,
     BroadcastIdaEventsTask,
@@ -34,7 +36,7 @@ from decompai_ida.inline_shannon_debug_traces_task import (
     InlineShannonDebugTracesTask,
 )
 from decompai_ida.ask_initial_questions_task import AskInitialQuestions
-from decompai_ida.model import CopilotModel, Model
+from decompai_ida.model import Model
 from decompai_ida.monitor_initial_analysis_task import (
     MonitorInitialAnalysisTask,
 )
@@ -100,6 +102,7 @@ _STATIC_CONFIG = StaticConfiguration(
 
 # Tasks that run without any database open.
 _GLOBAL_TASKS: ty.Collection[type[GlobalTask]] = (
+    AnalyticsTask,
     BroadcastIdaEventsTask,
     *_UI_GLOBAL_TASKS,
 )
@@ -133,6 +136,8 @@ _ACTIVE_TASKS: ty.Collection[type[Task]] = (
     UploadRevisionsTask,
     ShowBinaryPausedDialogTask,
 )
+
+RECORDER_MAX_ANALYTICS_EVENT = 16
 
 _stop: ty.Optional[ty.Callable[[bool], None]] = None
 _stop_db_tasks: ty.Optional[ty.Callable[[], None]] = None
@@ -216,9 +221,18 @@ async def main():
                 _stop = ida_tasks.AsyncCallback(stop)
 
                 async with api.open_api_client() as api_client:
+                    setup_result = await ida_tasks.run(
+                        configuration.setup_analytics_config_sync
+                    )
                     ida_events = Broadcast[IdaEvent](EventRecorder())
                     global_context = GlobalTaskContext(
                         ida_events=ida_events,
+                        analytics_events=Broadcast[ty.Any](
+                            RecordLatestN(RECORDER_MAX_ANALYTICS_EVENT)
+                        ),
+                        install_id=setup_result.install_id,
+                        is_first_install=setup_result.is_first_install,
+                        disable_analytics=setup_result.analytics_disabled,
                         static_config=_STATIC_CONFIG,
                         api_client=api_client,
                     )
@@ -276,8 +290,11 @@ async def _spawn_tasks(global_context: GlobalTaskContext):
 
     task_context = TaskContext(
         model=model,
-        copilot_model=CopilotModel(),
+        copilot_model=model.copilot_model,
         ida_events=global_context.ida_events,
+        emit_analytics_event=ida_tasks.AsyncCallback(
+            global_context.analytics_events.post
+        ),
         binaries_api=BinariesApi(global_context.api_client),
         user_api=UserApi(global_context.api_client),
         plugin_config=plugin_config,
