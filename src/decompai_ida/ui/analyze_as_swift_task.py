@@ -74,7 +74,7 @@ class _AnalyzeAsSwiftHandler(ida_kernwin.action_handler_t):
 class _FunctionsPopupHook(ida_kernwin.UI_Hooks):
     def finish_populating_widget_popup(self, widget, popup):  # type: ignore
         if ida_kernwin.get_widget_type(widget) in _SHOW_IN_WIDGETS:
-            ida_kernwin.attach_action_to_popup(widget, None, ACTION_ID, "")
+            ida_kernwin.attach_action_to_popup(widget, popup, ACTION_ID, "")
 
 
 class AnalyzeAsSwiftTask(Task):
