@@ -21,6 +21,7 @@ from decompai_client.decompai_api.analytics_api import AnalyticsApi
 from decompai_client.decompai_api.binaries_api import BinariesApi
 from decompai_client.decompai_api.default_api import DefaultApi
 from decompai_client.decompai_api.user_api import UserApi
+from decompai_client.decompai_api.web_api import WebApi
 
 # import ApiClient
 from decompai_client.api_response import ApiResponse
@@ -53,6 +54,8 @@ from decompai_client.models.copilot_config import CopilotConfig
 from decompai_client.models.copilot_message_sent_event import CopilotMessageSentEvent
 from decompai_client.models.copilot_open_event import CopilotOpenEvent
 from decompai_client.models.copilot_stop_requested_event import CopilotStopRequestedEvent
+from decompai_client.models.create_link_request import CreateLinkRequest
+from decompai_client.models.create_link_response import CreateLinkResponse
 from decompai_client.models.create_revision_params import CreateRevisionParams
 from decompai_client.models.database_opened_event import DatabaseOpenedEvent
 from decompai_client.models.decompiler import Decompiler
@@ -66,6 +69,7 @@ from decompai_client.models.field_definition import FieldDefinition
 from decompai_client.models.finish_and_analyze_current_revision_body import FinishAndAnalyzeCurrentRevisionBody
 from decompai_client.models.function import Function
 from decompai_client.models.function_overview import FunctionOverview
+from decompai_client.models.get_binary_instructions_response import GetBinaryInstructionsResponse
 from decompai_client.models.get_binary_status_response import GetBinaryStatusResponse
 from decompai_client.models.get_inferences_response import GetInferencesResponse
 from decompai_client.models.global_variable import GlobalVariable

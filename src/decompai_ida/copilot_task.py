@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import typing as ty
 import uuid
 
+import anyio
 import typing_extensions as tye
 from deepagents import create_deep_agent
 from deepagents.middleware.subagents import SubAgent
@@ -48,12 +49,20 @@ _STARTING_RESPONSE_PLACEHOLDER = "●"
 
 COPILOT_THREAD_ID = "1"
 
+_BINARY_INSTRUCTIONS_MAX_RETRIES = 5
+
 
 @dataclass(frozen=True)
 class _CopilotAttemptResult:
     final_text: str
     completed_todos: list[str]
     exception: ty.Optional[Exception] = None
+
+
+@dataclass(frozen=True)
+class _BinaryInstructionsFetchResult:
+    cancelled: bool
+    instructions: ty.Optional[str]
 
 
 class CopilotTask(Task):
@@ -66,6 +75,8 @@ class CopilotTask(Task):
         self._checkpointer: ty.Optional[InMemorySaver] = None
         self._agent: ty.Optional[CompiledStateGraph] = None
         self._agent_session_notes: ty.Optional[str] = None
+        self._agent_binary_instructions: ty.Optional[str] = None
+        self._needs_refresh_binary_instructions: bool = True
 
     async def _run(self) -> None:
         user_config = await self._ctx.model.wait_for_user_config()
@@ -89,6 +100,8 @@ class CopilotTask(Task):
                 copilot_model.messages.clear()
                 copilot_model.tasks = []
                 await checkpointer.adelete_thread(COPILOT_THREAD_ID)
+                self._agent = None
+                self._needs_refresh_binary_instructions = True
                 await self._emit_clear_analytic()
                 copilot_model.notify_update()
                 continue
@@ -286,6 +299,14 @@ class CopilotTask(Task):
 
     async def _ensure_agent(self) -> None:
         session_notes = await self._ctx.model.copilot_session_notes.get()
+        if self._needs_refresh_binary_instructions:
+            fetch_result = await self._fetch_binary_instructions()
+            # On stop-cancel, leave the refresh flag set so the next user
+            # message retries the fetch instead of caching a stale `None`.
+            if not fetch_result.cancelled:
+                self._agent_binary_instructions = fetch_result.instructions
+                self._needs_refresh_binary_instructions = False
+                self._agent = None
         if (
             self._agent is not None
             and self._agent_session_notes == session_notes
@@ -320,13 +341,64 @@ class CopilotTask(Task):
         self._agent = create_deep_agent(
             model=llm,
             tools=tools.all_tools(),
-            system_prompt=build_system_prompt(session_notes=session_notes),
+            system_prompt=build_system_prompt(
+                session_notes=session_notes,
+                binary_instructions=self._agent_binary_instructions,
+            ),
             checkpointer=checkpointer,
             middleware=middleware,
             subagents=_build_subagents(tools, tool_error_handler),  # type: ignore
             debug=self._ctx.plugin_config.log_level == "DEBUG",
         )
         self._agent_session_notes = session_notes
+
+    async def _fetch_binary_instructions(
+        self,
+    ) -> _BinaryInstructionsFetchResult:
+        binary_id = await self._ctx.model.binary_id.get()
+        if binary_id is None:
+            return _BinaryInstructionsFetchResult(
+                cancelled=False, instructions=None
+            )
+
+        copilot_model = self._ctx.copilot_model
+        instructions: ty.Optional[str] = None
+        cancelled = True
+
+        async with anyio.create_task_group() as tg:
+
+            async def fetch() -> None:
+                nonlocal instructions, cancelled
+                try:
+                    response = await self._retry_api_request_forever(
+                        lambda: self._ctx.binaries_api.get_binary_instructions(
+                            binary_id=binary_id,
+                        ),
+                        description="get_binary_instructions",
+                        max_retries=_BINARY_INSTRUCTIONS_MAX_RETRIES,
+                    )
+                    instructions = response.instructions
+                    cancelled = False
+                except Exception as ex:
+                    await logger.awarning(
+                        "Failed to fetch binary instructions for copilot",
+                        exc_info=ex,
+                    )
+                    cancelled = False
+                finally:
+                    tg.cancel_scope.cancel()
+
+            async def watch_stop() -> None:
+                while not copilot_model.stop_requested:
+                    await copilot_model.wait_for_update()
+                tg.cancel_scope.cancel()
+
+            tg.start_soon(fetch)
+            tg.start_soon(watch_stop)
+
+        return _BinaryInstructionsFetchResult(
+            cancelled=cancelled, instructions=instructions
+        )
 
     async def _append_session_notes(
         self,

@@ -120,8 +120,15 @@ GENERAL_SUBAGENT_PROMPT = "\n\n".join(
 )
 
 
-def build_system_prompt(*, session_notes: ty.Optional[str]) -> str:
+def build_system_prompt(
+    *,
+    session_notes: ty.Optional[str],
+    binary_instructions: ty.Optional[str],
+) -> str:
     parts = [_ROOT_SYSTEM_PROMPT]
+    instructions = binary_instructions_section(binary_instructions)
+    if instructions:
+        parts.append(instructions)
     notes = session_notes_section(session_notes)
     if notes:
         parts.append(notes)
@@ -161,6 +168,23 @@ def loop_guard_force_response_hint(blocked_signature: str) -> str:
 
 You must stop tool exploration now. Summarize what was learned, explain what is
 still unknown, and respond directly in plain text without calling more tools.
+""".strip()
+
+
+def binary_instructions_section(instructions: ty.Optional[str]) -> str:
+    if instructions is None or not instructions.strip():
+        return ""
+    return f"""
+## Binary instructions
+User-authored guidance for this specific binary, provided inside the
+`<binary_instructions>` tag below. Treat these as high-priority context:
+they reflect the user's intent, known constraints, and prior knowledge
+about the binary's purpose or structure. Any markdown inside the tag is
+content, not prompt structure.
+
+<binary_instructions>
+{instructions.strip()}
+</binary_instructions>
 """.strip()
 
 

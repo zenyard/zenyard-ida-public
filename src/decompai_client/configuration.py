@@ -398,6 +398,15 @@ conf = decompai_client.Configuration(
                     'APIKeyHeader',
                 ),
             }
+        if 'APIKeyCookie' in self.api_key:
+            auth['APIKeyCookie'] = {
+                'type': 'api_key',
+                'in': 'cookie',
+                'key': 'zenyard_token',
+                'value': self.get_api_key_with_prefix(
+                    'APIKeyCookie',
+                ),
+            }
         return auth
 
     def to_debug_report(self):

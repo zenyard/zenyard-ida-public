@@ -5,4 +5,5 @@ from decompai_client.decompai_api.analytics_api import AnalyticsApi
 from decompai_client.decompai_api.binaries_api import BinariesApi
 from decompai_client.decompai_api.default_api import DefaultApi
 from decompai_client.decompai_api.user_api import UserApi
+from decompai_client.decompai_api.web_api import WebApi
 

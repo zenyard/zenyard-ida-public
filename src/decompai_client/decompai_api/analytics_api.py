@@ -293,7 +293,8 @@ class AnalyticsApi:
 
         # authentication setting
         _auth_settings: List[str] = [
-            'APIKeyHeader'
+            'APIKeyHeader', 
+            'APIKeyCookie'
         ]
 
         return self.api_client.param_serialize(
