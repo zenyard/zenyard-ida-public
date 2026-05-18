@@ -30,6 +30,7 @@ class SwiftRejectionReason(str, Enum):
     HAS_NON_SWIFT_NAME = 'has_non_swift_name'
     COMPILER_GENERATED = 'compiler_generated'
     DOESNT_LOOK_LIKE_SWIFT = 'doesnt_look_like_swift'
+    INITIAL_SWIFT_ANALYSIS_DISABLED = 'initial_swift_analysis_disabled'
 
     @classmethod
     def from_json(cls, json_str: str) -> Self:

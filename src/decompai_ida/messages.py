@@ -88,6 +88,8 @@ def inform_no_swift_source_code_sync(
         message = "This function was not analyzed as Swift since it's likely auto-generated."
     elif reason == SwiftRejectionReason.DOESNT_LOOK_LIKE_SWIFT:
         message = "This function was not analyzed as Swift since it's not conclusively Swift."
+    elif reason == SwiftRejectionReason.INITIAL_SWIFT_ANALYSIS_DISABLED:
+        message = "Automatic Swift reconstruction was disabled for this file"
     else:
         message = "This function doesn't have Swift source code."
 

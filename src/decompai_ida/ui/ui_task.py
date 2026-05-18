@@ -11,7 +11,7 @@ from decompai_client import (
     QuotaExhaustedDialogShownEvent,
     QuotaExhaustedDialogShownReason,
 )
-from decompai_ida import ida_tasks, logger, messages
+from decompai_ida import ida_tasks, logger, messages, swift_utils
 from decompai_ida.analytics_task import analytics_timestamp
 from decompai_ida.apply_inferences_task import ApplyInferencesTask
 from decompai_ida.ask_initial_questions_task import ShowInitialQuestionsTask
@@ -93,8 +93,18 @@ class UiTask(Task):
                     )
                 )
         else:
+            user_config = await self._ctx.model.wait_for_user_config()
+            swift_relevant = bool(
+                user_config.swiftglow_enabled
+            ) and await ida_tasks.run(swift_utils.is_swift_binary_sync)
+            struct_reconstruction_relevant = bool(
+                user_config.struct_reconstruction_enabled
+            )
             self._ctx.model.runtime_status.queue_foreground_task_if_not_already_queued(
-                ShowInitialQuestionsTask()
+                ShowInitialQuestionsTask(
+                    swift_relevant=swift_relevant,
+                    struct_reconstruction_relevant=struct_reconstruction_relevant,
+                )
             )
         self._ctx.model.notify_update()
 

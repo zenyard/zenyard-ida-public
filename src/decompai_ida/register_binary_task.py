@@ -1,8 +1,11 @@
+import typing as ty
+
 import ida_kernwin
 import ida_nalt
 
 from decompai_client import (
     BinaryDetails,
+    EnabledInitialAnalyses,
     OriginalLanguages,
     PostBinaryBody,
     Decompiler,
@@ -60,6 +63,22 @@ class RegisterBinaryTask(Task):
         if await ida_tasks.run(ida_nalt.get_abi_name) == "swift":
             has_swift = True
 
+        initial_swift_analysis_enabled = (
+            await self._ctx.model.initial_swift_analysis_enabled.get()
+        )
+        struct_reconstruction_enabled = (
+            await self._ctx.model.struct_reconstruction_enabled.get()
+        )
+        enabled_initial_analyses: ty.Optional[EnabledInitialAnalyses] = None
+        if (
+            initial_swift_analysis_enabled is not None
+            or struct_reconstruction_enabled is not None
+        ):
+            enabled_initial_analyses = EnabledInitialAnalyses(
+                swift=initial_swift_analysis_enabled,
+                struct_reconstruction=struct_reconstruction_enabled,
+            )
+
         platform, os_version = await extract_platform_and_os_version()
         input_file_sha256 = await ida_tasks.run(
             ida_nalt.retrieve_input_file_sha256
@@ -69,6 +88,7 @@ class RegisterBinaryTask(Task):
             details=BinaryDetails(
                 instructions=binary_instructions,
                 original_languages=OriginalLanguages(swift=has_swift),
+                enabled_initial_analyses=enabled_initial_analyses,
                 platform=platform,
                 os_version=os_version,
                 input_file_sha256=input_file_sha256.hex(),

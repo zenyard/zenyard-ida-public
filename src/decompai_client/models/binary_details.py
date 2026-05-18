@@ -20,6 +20,7 @@ import json
 from pydantic import BaseModel, ConfigDict, StrictStr, field_validator
 from typing import Any, ClassVar, Dict, List, Optional
 from decompai_client.models.decompiler import Decompiler
+from decompai_client.models.enabled_initial_analyses import EnabledInitialAnalyses
 from decompai_client.models.original_languages import OriginalLanguages
 from typing import Optional, Set
 from typing_extensions import Self
@@ -30,11 +31,12 @@ class BinaryDetails(BaseModel):
     """ # noqa: E501
     instructions: Optional[StrictStr] = None
     original_languages: Optional[OriginalLanguages] = None
+    enabled_initial_analyses: Optional[EnabledInitialAnalyses] = None
     platform: Optional[StrictStr] = None
     os_version: Optional[StrictStr] = None
     input_file_sha256: Optional[StrictStr] = None
     decompiler: Optional[Decompiler] = None
-    __properties: ClassVar[List[str]] = ["instructions", "original_languages", "platform", "os_version", "input_file_sha256", "decompiler"]
+    __properties: ClassVar[List[str]] = ["instructions", "original_languages", "enabled_initial_analyses", "platform", "os_version", "input_file_sha256", "decompiler"]
 
     @field_validator('platform')
     def platform_validate_enum(cls, value):
@@ -88,6 +90,9 @@ class BinaryDetails(BaseModel):
         # override the default output from pydantic by calling `to_dict()` of original_languages
         if self.original_languages:
             _dict['original_languages'] = self.original_languages.to_dict()
+        # override the default output from pydantic by calling `to_dict()` of enabled_initial_analyses
+        if self.enabled_initial_analyses:
+            _dict['enabled_initial_analyses'] = self.enabled_initial_analyses.to_dict()
         # override the default output from pydantic by calling `to_dict()` of decompiler
         if self.decompiler:
             _dict['decompiler'] = self.decompiler.to_dict()
@@ -130,6 +135,7 @@ class BinaryDetails(BaseModel):
         _obj = cls.model_validate({
             "instructions": obj.get("instructions"),
             "original_languages": OriginalLanguages.from_dict(obj["original_languages"]) if obj.get("original_languages") is not None else None,
+            "enabled_initial_analyses": EnabledInitialAnalyses.from_dict(obj["enabled_initial_analyses"]) if obj.get("enabled_initial_analyses") is not None else None,
             "platform": obj.get("platform"),
             "os_version": obj.get("os_version"),
             "input_file_sha256": obj.get("input_file_sha256"),

@@ -251,6 +251,16 @@ class Model:
         self.binary_instructions = storage.SingleValue(
             "binary_instructions", ty.Optional[str], default=None
         )
+        self.initial_swift_analysis_enabled = storage.SingleValue(
+            "initial_swift_analysis_enabled",
+            ty.Optional[bool],
+            default=None,
+        )
+        self.struct_reconstruction_enabled = storage.SingleValue(
+            "struct_reconstruction_enabled",
+            ty.Optional[bool],
+            default=None,
+        )
         self.original_files_uploaded = storage.SingleValue(
             "original_files_uploaded", bool, default=False
         )
@@ -429,6 +439,8 @@ class Model:
         await self.asked_initial_questions.clear()
         await self.ready_for_analysis.clear()
         await self.binary_instructions.clear()
+        await self.initial_swift_analysis_enabled.clear()
+        await self.struct_reconstruction_enabled.clear()
         await self.original_files_uploaded.clear()
         await self.sections_uploaded.clear()
         await self.database_dirty.clear()

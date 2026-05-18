@@ -62,6 +62,7 @@ from decompai_client.models.decompiler import Decompiler
 from decompai_client.models.decompiler_enum import DecompilerEnum
 from decompai_client.models.decompiler_note import DecompilerNote
 from decompai_client.models.decompiler_type import DecompilerType
+from decompai_client.models.enabled_initial_analyses import EnabledInitialAnalyses
 from decompai_client.models.event import Event
 from decompai_client.models.expired_usage import ExpiredUsage
 from decompai_client.models.extra_details import ExtraDetails
