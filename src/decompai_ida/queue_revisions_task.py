@@ -8,6 +8,7 @@ from decompai_ida.object_graph import get_objects_in_approx_topo_order_sync
 from decompai_ida.model import Object, Revision, SyncStatus
 from decompai_ida.objects import Symbol
 from decompai_ida.tasks import ForegroundTask
+from decompai_ida.warning_auto_dismisser import auto_dismiss_warnings
 
 _SCANNING_WAITBOX_TEXT = cleandoc("""
     Zenyard is Preparing
@@ -41,31 +42,35 @@ class BaseQueueRevisionsTask(ForegroundTask):
 
         self._wait_box.start_new_task(_SCANNING_WAITBOX_TEXT)
 
-        addresses = get_objects_in_approx_topo_order_sync(
-            self._get_symbols_to_queue()
-        )
-        logger.debug("Scanned for addresses to queue", count=len(addresses))
+        # Reading objects and applying pending inferences may trigger IDA
+        # warning dialogs (e.g. "can't rename byte ... bad character") that
+        # would otherwise block the foreground task.
+        with auto_dismiss_warnings():
+            addresses = get_objects_in_approx_topo_order_sync(
+                self._get_symbols_to_queue()
+            )
+            logger.debug("Scanned for addresses to queue", count=len(addresses))
 
-        self._wait_box.start_new_task(
-            _QUEUEING_WAITBOX_TEXT,
-            items=len(addresses),
-        )
+            self._wait_box.start_new_task(
+                _QUEUEING_WAITBOX_TEXT,
+                items=len(addresses),
+            )
 
-        for address in addresses:
-            self._buffer_object_if_changed(address)
-            if (
-                len(self._buffer)
-                == self._ctx.static_config.max_objects_in_revision
-            ):
+            for address in addresses:
+                self._buffer_object_if_changed(address)
+                if (
+                    len(self._buffer)
+                    == self._ctx.static_config.max_objects_in_revision
+                ):
+                    self._flush_revision()
+                self._wait_box.mark_items_complete(1)
+                ida_tasks.execute_queued_tasks_sync()
+
+            if len(self._buffer) > 0:
                 self._flush_revision()
-            self._wait_box.mark_items_complete(1)
-            ida_tasks.execute_queued_tasks_sync()
 
-        if len(self._buffer) > 0:
-            self._flush_revision()
-
-        if self._pending_flush is not None:
-            self._push_pending_flush(is_last=True)
+            if self._pending_flush is not None:
+                self._push_pending_flush(is_last=True)
 
         self._ctx.model.notify_update()
 

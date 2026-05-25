@@ -137,6 +137,14 @@ def _all_global_variable_symbols_sync() -> ty.Iterator[Symbol]:
 
 
 def all_object_symbols_sync() -> ty.Iterator[Symbol]:
+    # Workaround for server issue where segments are dropped if same-address
+    # object uploaded.
+    for symbol in _all_object_symbols_impl_sync():
+        if not _is_at_segment_start(symbol.address):
+            yield symbol
+
+
+def _all_object_symbols_impl_sync() -> ty.Iterator[Symbol]:
     yield from _all_function_symbols_sync()
 
     global_variables_buffer = list[Symbol]()
@@ -304,6 +312,11 @@ def _is_ignored_segment_name(name: str) -> bool:
 def is_in_ignored_segment_sync(address: int) -> bool:
     segment = ida_segment.getseg(address)
     return _is_ignored_segment_name(ida_segment.get_segm_name(segment))
+
+
+def _is_at_segment_start(address: int) -> bool:
+    segment = ida_segment.getseg(address)
+    return segment is not None and segment.start_ea == address
 
 
 def _is_object_segment(segment: ida_segment.segment_t) -> bool:

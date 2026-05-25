@@ -1,10 +1,10 @@
 """
-Event filter to automatically dismiss QMessageBox warnings with only OK button.
+Event filter to automatically dismiss QMessageBox warnings.
 
 This module provides a context manager that installs a Qt event filter to
-automatically close warning message boxes that have a single OK button.
-This is useful during long-running operations where IDA may show warnings
-that would otherwise block execution.
+automatically close warning message boxes. Supports both single-OK warnings
+and two-button Help/OK warnings (the OK button is clicked, dismissing the
+dialog without opening Help).
 
 IMPORTANT: The auto_dismiss_warnings() context manager must be called from
 IDA's main/UI thread. It is suitable for use in ForegroundTask implementations
@@ -20,33 +20,40 @@ try:
 
     class _WarningAutoDismisser(QObject):
         """
-        Event filter that automatically dismisses QMessageBox warnings with only OK button.
+        Event filter that automatically dismisses QMessageBox warnings.
 
-        This filter intercepts Show events for QMessageBox widgets and automatically
-        accepts them if they are warning dialogs with a single OK button.
+        Handles two warning shapes:
+          - Single OK button: dialog is accepted.
+          - Two buttons (Help + OK): the OK button is clicked so the warning
+            is dismissed without invoking Help.
         """
 
         def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # pyright: ignore[reportIncompatibleMethodOverride]
-            """
-            Filter Qt events to auto-dismiss matching warning dialogs.
-
-            Args:
-                obj: The object that generated the event
-                event: The event to filter
-
-            Returns:
-                True if the event was handled, False otherwise
-            """
-            # Check if a widget is being shown
             if event.type() == QEvent.Show and isinstance(obj, QMessageBox):
-                # Check if it's a warning message box
                 if obj.icon() == QMessageBox.Warning:
-                    buttons = obj.buttons()
-                    if len(buttons) == 1:
-                        QTimer.singleShot(10, obj.accept)
+                    self._try_dismiss(obj)
 
-            # Pass through to parent event filter
             return super().eventFilter(obj, event)
+
+        def _try_dismiss(self, box: "QMessageBox") -> None:
+            buttons = box.buttons()
+            if len(buttons) == 1:
+                QTimer.singleShot(10, box.accept)
+            elif len(buttons) == 2:
+                # If one of the buttons is Help, click the other one. IDA
+                # sometimes labels the dismiss button "OK" but exposes it as
+                # a non-Ok standard button (e.g. Yes), so we identify it by
+                # elimination rather than matching its specific role.
+                help_buttons = [
+                    b
+                    for b in buttons
+                    if box.standardButton(b) == QMessageBox.Help
+                ]
+                if len(help_buttons) == 1:
+                    dismiss_button = next(
+                        b for b in buttons if b is not help_buttons[0]
+                    )
+                    QTimer.singleShot(10, dismiss_button.click)
 
     @contextmanager
     def auto_dismiss_warnings() -> ty.Iterator[None]:
