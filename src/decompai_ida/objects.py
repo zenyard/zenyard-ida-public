@@ -259,6 +259,10 @@ def read_object_sync(
             )
 
     validate_object(result)
+
+    if not use_decompilation_cache and not isinstance(result, GlobalVariable):
+        ida_hexrays.mark_cfunc_dirty(address)
+
     return result
 
 
@@ -275,6 +279,7 @@ def _decompile(
     flags = 0
     if not use_decompilation_cache:
         flags |= ida_hexrays.DECOMP_NO_CACHE
+        flags |= ida_hexrays.DECOMP_GXREFS_NOUPD
     if (
         instructions < _MAX_INSTRUCTIONS_TO_DECOMPILE_WITHOUT_WAITBOX
         or not show_wait_box

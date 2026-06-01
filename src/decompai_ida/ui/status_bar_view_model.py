@@ -104,12 +104,23 @@ class StatusBarViewModel(QObject):
                 self._get_analysis_progress_sync
             )
         ) is not None:
-            self._emit_status(
-                self._with_results_ready(
-                    "Analyzing in background", ready_count
-                ),
-                progress=analysis_progress,
-            )
+            if (
+                analysis_progress == 0.0
+                and self._online_context_generation_enabled()
+            ):
+                self._emit_status(
+                    self._with_results_ready(
+                        "Server preparing binary", ready_count
+                    ),
+                    progress="busy",
+                )
+            else:
+                self._emit_status(
+                    self._with_results_ready(
+                        "Analyzing in background", ready_count
+                    ),
+                    progress=analysis_progress,
+                )
 
         elif self._is_background_task_active("uploading"):
             self._emit_status(
@@ -216,6 +227,13 @@ class StatusBarViewModel(QObject):
                 )
             case UnlimitedUsage() | None:
                 return UsageState("", "", False, "none")
+
+    def _online_context_generation_enabled(self) -> bool:
+        user_config = self._model.runtime_status.user_config
+        return bool(
+            user_config is not None
+            and user_config.online_context_generation_enabled
+        )
 
     def _get_queue_position(self) -> ty.Optional[int]:
         state = self._model.runtime_status.binary_state

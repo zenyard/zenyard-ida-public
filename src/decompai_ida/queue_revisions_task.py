@@ -1,3 +1,4 @@
+import gc
 import typing as ty
 from abc import abstractmethod
 from dataclasses import dataclass
@@ -9,6 +10,11 @@ from decompai_ida.model import Object, Revision, SyncStatus
 from decompai_ida.objects import Symbol
 from decompai_ida.tasks import ForegroundTask
 from decompai_ida.warning_auto_dismisser import auto_dismiss_warnings
+
+_GC_FLUSH_INTERVAL = 64
+"""
+Every this many revision flushes, force a Python GC.
+"""
 
 _SCANNING_WAITBOX_TEXT = cleandoc("""
     Zenyard is Preparing
@@ -39,6 +45,7 @@ class BaseQueueRevisionsTask(ForegroundTask):
     def _run(self) -> None:
         self._buffer = list[_BufferedObject]()
         self._pending_flush: ty.Optional[tuple[_BufferedObject, ...]] = None
+        self._flushes_since_gc = 0
 
         self._wait_box.start_new_task(_SCANNING_WAITBOX_TEXT)
 
@@ -143,6 +150,11 @@ class BaseQueueRevisionsTask(ForegroundTask):
             logger.debug("Object marked clean", address=buffered_object.address)
 
         self._ctx.model.notify_update()
+
+        self._flushes_since_gc += 1
+        if self._flushes_since_gc >= _GC_FLUSH_INTERVAL:
+            self._flushes_since_gc = 0
+            gc.collect()
 
     @abstractmethod
     def _get_symbols_to_queue(self) -> ty.Iterable[Symbol]: ...

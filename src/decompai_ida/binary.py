@@ -23,6 +23,9 @@ MACHO_PLATFORM = {
 }
 
 
+_MAX_ORIGINAL_FILE_SIZE_TO_UPLOAD = 192 * 2**20
+
+
 def get_size_sync() -> int:
     """
     Gets approximate size of the input binary, by summing sizes of segments
@@ -73,7 +76,7 @@ def _get_file_type_sync() -> str:
     return ida_loader.get_file_type_name()
 
 
-async def read_compressed_input_file() -> InputFile:
+async def read_compressed_input_file() -> ty.Optional[InputFile]:
     # Check if it's an Apple dyld cache
     file_type = await ida_tasks.run(_get_file_type_sync)
     if file_type.lower().startswith("apple dyld cache"):
@@ -94,6 +97,10 @@ async def read_compressed_input_file() -> InputFile:
     if not await input_path.exists():
         # Give up
         raise Exception("No input file")
+
+    stat_result = await input_path.stat()
+    if stat_result.st_size > _MAX_ORIGINAL_FILE_SIZE_TO_UPLOAD:
+        return None
 
     async with await input_path.open("rb") as input_file:
         data = await to_thread.run_sync(

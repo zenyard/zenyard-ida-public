@@ -4,12 +4,9 @@ import typing as ty
 from decompai_ida.objects import Symbol
 import ida_funcs
 import idautils
-import typing_extensions as tye
 from more_itertools import side_effect
 
 from decompai_ida.wait_box import check_user_cancelled
-
-_AddressGraph: tye.TypeAlias = ty.Mapping[int, ty.Collection[int]]
 
 
 def get_objects_in_approx_topo_order_sync(
@@ -21,7 +18,9 @@ def get_objects_in_approx_topo_order_sync(
     Each given address must be that starting address of a function.
     """
     symbols = list(symbols)
-    obj_to_dependencies = {symbol.address: set() for symbol in symbols}
+    obj_to_dependencies: dict[int, set[int]] = {
+        symbol.address: set() for symbol in symbols
+    }
 
     for caller, callee in _read_calls(
         symbol.address for symbol in symbols if symbol.type == "function"
@@ -58,15 +57,14 @@ def _read_xrefs_from_functions(
                 yield (target_address, accessing_function.start_ea)
 
 
-def _approx_topo_order(graph: _AddressGraph) -> ty.Sequence[int]:
+def _approx_topo_order(g: dict[int, set[int]]) -> ty.Sequence[int]:
     """
     Returns an approximate topological ordering of nodes in graph, given
     by mapping between node to its dependencies (predecessors).
 
-    If cycles exist in graph, arbitrary edges would be ignored.
+    If cycles exist in graph, arbitrary edges would be ignored. Mutates
+    the input dict in place.
     """
-
-    g = {node: set(deps) for node, deps in graph.items()}
 
     while True:
         try:

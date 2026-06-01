@@ -52,6 +52,7 @@ from decompai_ida.show_initial_upload_message_task import (
     ShowInitialUploadMessageTask,
 )
 from decompai_ida.start_foreground_tasks_task import StartForegroundTasksTask
+from decompai_ida.web_ui import WebUI
 from decompai_ida.tasks import (
     GlobalTask,
     GlobalTaskContext,
@@ -225,6 +226,10 @@ async def main():
                         configuration.setup_analytics_config_sync
                     )
                     ida_events = Broadcast[IdaEvent](EventRecorder())
+                    web_ui = WebUI(
+                        api_client=api_client,
+                        install_id=setup_result.install_id,
+                    )
                     global_context = GlobalTaskContext(
                         ida_events=ida_events,
                         analytics_events=Broadcast[ty.Any](
@@ -235,6 +240,7 @@ async def main():
                         disable_analytics=setup_result.analytics_disabled,
                         static_config=_STATIC_CONFIG,
                         api_client=api_client,
+                        web_ui=web_ui,
                     )
 
                     for global_task_type in _GLOBAL_TASKS:
@@ -299,6 +305,7 @@ async def _spawn_tasks(global_context: GlobalTaskContext):
         user_api=UserApi(global_context.api_client),
         plugin_config=plugin_config,
         static_config=global_context.static_config,
+        web_ui=global_context.web_ui,
     )
 
     with logger.open(log_path, plugin_config.log_level):

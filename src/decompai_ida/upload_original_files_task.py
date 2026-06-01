@@ -23,6 +23,11 @@ class UploadOriginalFilesTask(Task):
         binary_id = await self._ctx.model.binary_id.get()
         assert binary_id is not None
         input_file = await binary.read_compressed_input_file()
+        if input_file is None:
+            await logger.ainfo(
+                "Skipping original file upload — file exceeds size limit"
+            )
+            return
         await self._retry_api_request_forever(
             lambda: self._ctx.binaries_api.put_original_file(
                 binary_id=binary_id,

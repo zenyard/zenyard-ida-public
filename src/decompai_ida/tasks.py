@@ -15,6 +15,7 @@ from decompai_ida.events import IdaEvent
 from decompai_ida.ida_tasks import AsyncCallback
 from decompai_ida.model import CopilotModel, Model
 from decompai_ida.wait_box import WaitBox
+from decompai_ida.web_ui import WebUI
 
 _T = ty.TypeVar("_T")
 
@@ -50,6 +51,7 @@ class GlobalTaskContext:
     disable_analytics: bool
     static_config: StaticConfiguration
     api_client: ApiClient
+    web_ui: WebUI
 
 
 @dataclass(frozen=True)
@@ -66,6 +68,7 @@ class TaskContext:
     user_api: UserApi
     plugin_config: PluginConfiguration
     static_config: StaticConfiguration
+    web_ui: WebUI
 
 
 class _BaseTask(ABC):

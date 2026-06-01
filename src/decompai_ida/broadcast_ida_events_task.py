@@ -117,7 +117,8 @@ class _UiEventHooks(_BaseHooks, ida_kernwin.UI_Hooks):
 
 class _DbEventHooks(_BaseDbHooks, ida_idp.IDB_Hooks):
     def auto_empty_finally(self, /):
-        self._queue_event(InitialAutoAnalysisComplete())
+        if not should_block_ida_events():
+            self._queue_event(InitialAutoAnalysisComplete())
         return super().auto_empty_finally()
 
     # Note - func_update not handled, it creates a lot of false-positive
@@ -188,6 +189,9 @@ class _DbEventHooks(_BaseDbHooks, ida_idp.IDB_Hooks):
         return super().local_types_changed(ltc, ordinal, name)
 
     def _queue_local_type_changed_for_ordinal(self, ordinal: int):
+        if should_block_ida_events():
+            return
+
         if ordinal == 0:
             return
 
