@@ -42,5 +42,9 @@ This project is licensed under the **GNU Affero General Public License v3.0 only
 
 See the [LICENSE](LICENSE) file in this repository for the full license text.
 
+The third-party components vendored under `src/decompai_ida/mcp/vendor/` are the
+exception: they retain their own MIT licenses (see that directory's
+[README](src/decompai_ida/mcp/vendor/README.md) and accompanying `LICENSE` files).
+
 ---
 *Note: This repository does not contain the proprietary Zenyard backend or AI models, only the client-side extension required to interface with the Zenyard service.*

@@ -13,7 +13,7 @@ from decompai_ida.broadcast import Broadcast
 from decompai_ida.configuration import BadConfigurationFile, PluginConfiguration
 from decompai_ida.events import IdaEvent
 from decompai_ida.ida_tasks import AsyncCallback
-from decompai_ida.model import CopilotModel, Model
+from decompai_ida.model import Model
 from decompai_ida.wait_box import WaitBox
 from decompai_ida.web_ui import WebUI
 
@@ -51,7 +51,6 @@ class GlobalTaskContext:
     disable_analytics: bool
     static_config: StaticConfiguration
     api_client: ApiClient
-    web_ui: WebUI
 
 
 @dataclass(frozen=True)
@@ -61,7 +60,6 @@ class TaskContext:
     """
 
     model: Model
-    copilot_model: CopilotModel
     ida_events: Broadcast[IdaEvent]
     emit_analytics_event: AsyncCallback
     binaries_api: BinariesApi

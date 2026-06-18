@@ -15,7 +15,6 @@ class FetchUserConfigTask(Task):
             await logger.ainfo(
                 "Got user configuration",
                 max_binary_size_mb=user_config.max_binary_size_mb,
-                has_copilot=user_config.copilot is not None,
             )
 
         except Exception as ex:

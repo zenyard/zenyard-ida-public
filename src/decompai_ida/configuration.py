@@ -65,6 +65,16 @@ class PluginConfiguration(BaseModel, frozen=True):
 
     disable_analytics: bool = False
 
+    # Local MCP server exposing IDA analysis tools to MCP clients.
+    mcp_enabled: bool = True
+
+    mcp_host: str = "127.0.0.1"
+
+    # 0 lets the OS assign a free port (avoids collisions between concurrent
+    # IDA instances); set a fixed port to pin it. The actual bound port is
+    # logged on startup.
+    mcp_port: int = 0
+
     def with_user_config(
         self,
         *,
@@ -76,6 +86,9 @@ class PluginConfiguration(BaseModel, frozen=True):
             api_key=api_key,
             log_level=self.log_level,
             verify_ssl=self.verify_ssl,
+            mcp_enabled=self.mcp_enabled,
+            mcp_host=self.mcp_host,
+            mcp_port=self.mcp_port,
         )
 
 

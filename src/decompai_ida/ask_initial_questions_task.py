@@ -18,16 +18,23 @@ from decompai_ida.queue_revisions_task import QueueRevisionsTask
 from decompai_ida.register_binary_task import BinaryExceedsSizeLimitError
 from decompai_ida.tasks import ForegroundTask, Task
 
+# Form shown when no additional analyses are available: a plain single-page
+# dialog with no tabs.
+_FORM_DEFINITION_BASE = cleandoc("""
+    Run Zenyard Analysis
+
+    Looks like it's your first time opening this file — Zenyard can analyze it now to save you time and effort.
+    {FormChangeCb}
+    <Auto-apply results when ready:{auto_apply}>
+    <Allow Zenyard to improve database before uploading:{allow_preprocessing}>{chkGroup1}>
+""")
+
+# Appended to the base form when additional analyses are available, which turns
+# the dialog into a tabbed form with a separate "Analysis Options" tab.
 # Template uses `$name` for substitution, so the IDA `{name}` placeholders pass
 # through untouched.
-_FORM_DEFINITION_TEMPLATE = Template(
+_ANALYSIS_OPTIONS_TAB_TEMPLATE = Template(
     cleandoc("""
-        Run Zenyard Analysis
-
-        Looks like it's your first time opening this file — Zenyard can analyze it now to save you time and effort.
-        {FormChangeCb}
-        <Auto-apply results when ready:{auto_apply}>
-        <Allow Zenyard to improve database before uploading:{allow_preprocessing}>{chkGroup1}>
         <=:General>
         Choose additional analyses to run on this binary:
 
@@ -247,26 +254,9 @@ def _show_form_sync(
             )
         )
 
-    analyses_lines = list[str]()
-    analyses_mask = 0
-    for i, cb in enumerate(analysis_checkboxes):
-        is_last = i == len(analysis_checkboxes) - 1
-        group_suffix = "{chkGroup2}>" if is_last else ""
-        analyses_lines.append(f"<{cb.label}:{{{cb.field_name}}}>{group_suffix}")
-        if cb.default_checked:
-            analyses_mask |= 1 << i
-
-    form_definition = _FORM_DEFINITION_TEMPLATE.substitute(
-        analyses_checkboxes="\n".join(analyses_lines),
-    )
-
     general_checkboxes = ida_kernwin.Form.ChkGroupControl(  # type: ignore
         ("auto_apply", "allow_preprocessing"),
         default_general_mask,
-    )
-    analyses_group = ida_kernwin.Form.ChkGroupControl(  # type: ignore
-        tuple(cb.field_name for cb in analysis_checkboxes),
-        analyses_mask,
     )
 
     disabled_fields = tuple(
@@ -282,9 +272,31 @@ def _show_form_sync(
 
     controls: dict[str, ty.Any] = {
         "chkGroup1": general_checkboxes,
-        "chkGroup2": analyses_group,
         "FormChangeCb": ida_kernwin.Form.FormChangeCb(on_form_change),  # type: ignore
     }
+
+    form_definition = _FORM_DEFINITION_BASE
+    # Only render the "Analysis Options" tab when there's at least one analysis
+    # to offer; otherwise keep the dialog as a plain single-page form.
+    if analysis_checkboxes:
+        analyses_lines = list[str]()
+        analyses_mask = 0
+        for i, cb in enumerate(analysis_checkboxes):
+            is_last = i == len(analysis_checkboxes) - 1
+            group_suffix = "{chkGroup2}>" if is_last else ""
+            analyses_lines.append(
+                f"<{cb.label}:{{{cb.field_name}}}>{group_suffix}"
+            )
+            if cb.default_checked:
+                analyses_mask |= 1 << i
+
+        form_definition += "\n" + _ANALYSIS_OPTIONS_TAB_TEMPLATE.substitute(
+            analyses_checkboxes="\n".join(analyses_lines),
+        )
+        controls["chkGroup2"] = ida_kernwin.Form.ChkGroupControl(  # type: ignore
+            tuple(cb.field_name for cb in analysis_checkboxes),
+            analyses_mask,
+        )
 
     form = ida_kernwin.Form(form_definition, controls)
     try:

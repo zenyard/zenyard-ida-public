@@ -4,7 +4,6 @@ import typing as ty
 import anyio
 import ida_idp
 import ida_kernwin
-from decompai_ida.copilot_task import CopilotTask
 import exceptiongroup
 
 from decompai_client import BinariesApi, UserApi
@@ -35,6 +34,7 @@ from decompai_ida.fetch_user_plan_task import FetchUserPlanTask
 from decompai_ida.inline_shannon_debug_traces_task import (
     InlineShannonDebugTracesTask,
 )
+from decompai_ida.mcp_server_task import McpServerTask
 from decompai_ida.ask_initial_questions_task import AskInitialQuestions
 from decompai_ida.model import Model
 from decompai_ida.monitor_initial_analysis_task import (
@@ -71,7 +71,7 @@ from decompai_ida.upload_revisions_task import UploadRevisionsTask
 
 try:
     from decompai_ida.ui.ui_task import UiTask
-    from decompai_ida.ui.copilot_ui_task import CopilotUiTask
+    from decompai_ida.ui.agent_ui_task import AgentUiTask
     from decompai_ida.ui.swift_ui_task import SwiftUiTask
     from decompai_ida.ui.functions_colorizer_task import FunctionsColorizerTask
     from decompai_ida.ui.zenyard_menu_task import ZenyardMenuTask
@@ -87,7 +87,7 @@ try:
     _UI_TASKS = [
         AnalyzeAsSwiftTask,
         ApplyQueuedInferencesActionTask,
-        CopilotUiTask,
+        AgentUiTask,
         FunctionsColorizerTask,
         SwiftUiTask,
         UiTask,
@@ -112,8 +112,8 @@ _GLOBAL_TASKS: ty.Collection[type[GlobalTask]] = (
 _TASKS: ty.Collection[type[Task]] = (
     ApplyPendingInferencesTask,
     BroadcastHexRaysEventsTask,
-    CopilotTask,
     FetchUserConfigTask,
+    McpServerTask,
     TrackChangesTask,
     TrackIdaSettledTask,
     InlineShannonDebugTracesTask,
@@ -226,10 +226,6 @@ async def main():
                         configuration.setup_analytics_config_sync
                     )
                     ida_events = Broadcast[IdaEvent](EventRecorder())
-                    web_ui = WebUI(
-                        api_client=api_client,
-                        install_id=setup_result.install_id,
-                    )
                     global_context = GlobalTaskContext(
                         ida_events=ida_events,
                         analytics_events=Broadcast[ty.Any](
@@ -240,7 +236,6 @@ async def main():
                         disable_analytics=setup_result.analytics_disabled,
                         static_config=_STATIC_CONFIG,
                         api_client=api_client,
-                        web_ui=web_ui,
                     )
 
                     for global_task_type in _GLOBAL_TASKS:
@@ -294,9 +289,14 @@ async def _spawn_tasks(global_context: GlobalTaskContext):
 
     plugin_config = await ida_tasks.run(configuration.read_configuration_sync)
 
+    web_ui = WebUI(
+        api_client=global_context.api_client,
+        install_id=global_context.install_id,
+        model=model,
+    )
+
     task_context = TaskContext(
         model=model,
-        copilot_model=model.copilot_model,
         ida_events=global_context.ida_events,
         emit_analytics_event=ida_tasks.AsyncCallback(
             global_context.analytics_events.post
@@ -305,7 +305,7 @@ async def _spawn_tasks(global_context: GlobalTaskContext):
         user_api=UserApi(global_context.api_client),
         plugin_config=plugin_config,
         static_config=global_context.static_config,
-        web_ui=global_context.web_ui,
+        web_ui=web_ui,
     )
 
     with logger.open(log_path, plugin_config.log_level):

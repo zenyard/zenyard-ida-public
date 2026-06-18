@@ -106,6 +106,19 @@ TaskName = ty.Literal[
 ]
 
 
+@dataclass(frozen=True)
+class RelayIdentity:
+    """
+    Identifiers for the relay tunneling this database's MCP server.
+    """
+
+    relay_id: str
+    "This device's stable relay id (`zenyard-relay relay-id`)."
+
+    upstream_id: str
+    "Per-database routing key the relay registers with the backend."
+
+
 @dataclass
 class RuntimeStatus:
     """
@@ -134,6 +147,9 @@ class RuntimeStatus:
 
     binary_state: ty.Optional[BinaryState] = None
 
+    relay_identity: ty.Optional[RelayIdentity] = None
+    "Relay/upstream ids, set once the MCP server is ready and relayed."
+
     def mark_connection_successful(self, name: str):
         if name in self.connection_failures:
             del self.connection_failures[name]
@@ -150,57 +166,6 @@ class RuntimeStatus:
                 existing.merge_from(new_task)
                 return
         self.foreground_task_queue.append(new_task)
-
-
-@dataclass
-class Message:
-    sender: ty.Literal["AI", "User"]
-    text: str
-    tool_count: ty.Optional[int] = None
-
-
-@dataclass(frozen=True)
-class Task:
-    content: str
-    status: ty.Literal["pending", "in_progress", "completed"]
-
-
-@dataclass
-class CopilotModel:
-    """
-    Model for copilot chat state and communication.
-    """
-
-    messages: list["Message"] = field(default_factory=list)
-    tasks: list[Task] = field(default_factory=list)
-    is_active: bool = False
-    stop_requested: bool = False
-    clear_requested: bool = False
-    notify_update: AsyncCallback = field(init=False)
-    _updated: anyio.Event = field(init=False)
-
-    def __post_init__(self):
-        """
-        Initialize event loop objects.
-
-        Note: This should only be called via create() from async context.
-        Direct instantiation outside async context will cause GC issues on macOS.
-        """
-        self.notify_update = AsyncCallback(self._notify_update)
-        self._updated = anyio.Event()
-
-    async def wait_for_update(self):
-        """
-        Wait for update notification (via `notify_update`).
-        """
-        await self._updated.wait()
-
-    def _notify_update(self):
-        """
-        Wake all tasks waiting for update.
-        """
-        self._updated.set()
-        self._updated = anyio.Event()
 
 
 def is_usage_exhausted(
@@ -229,7 +194,6 @@ class Model:
         self.notify_update = AsyncCallback(self._notify_update)
         self.runtime_status = RuntimeStatus()
         self._updated = anyio.Event()
-        self.copilot_model = CopilotModel()
         self.swift_source_available = False
 
     def _open_storages_sync(self):
@@ -303,9 +267,6 @@ class Model:
         )
         self.pending_inference_counts = storage.SingleValue(
             "pending_inference_counts", dict[str, int], default={}
-        )
-        self.copilot_session_notes = storage.SingleValue(
-            "copilot_session_notes", ty.Optional[str], default=None
         )
 
         # Type management storage
@@ -463,4 +424,3 @@ class Model:
         await self.registered_struct_names.clear()
         await self.function_original_type_annotations.clear()
         await self.pending_inference_counts.set({})
-        await self.copilot_session_notes.clear()
