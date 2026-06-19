@@ -150,6 +150,25 @@ class RuntimeStatus:
     relay_identity: ty.Optional[RelayIdentity] = None
     "Relay/upstream ids, set once the MCP server is ready and relayed."
 
+    mcp_active_count: int = 0
+    "Number of MCP tool invocations currently running."
+
+    last_mcp_activity: ty.Optional[float] = None
+    "`time.monotonic()` when the last MCP tool invocation finished; None if none."
+
+    def is_mcp_active(self, *, inactivity_timeout: float) -> bool:
+        """
+        Whether the Zenyard agent is considered to be working via MCP.
+
+        True while any tool runs, and for `inactivity_timeout` seconds after the
+        last one finished (so the status lingers briefly between calls).
+        """
+        if self.mcp_active_count > 0:
+            return True
+        if self.last_mcp_activity is None:
+            return False
+        return time.monotonic() - self.last_mcp_activity < inactivity_timeout
+
     def mark_connection_successful(self, name: str):
         if name in self.connection_failures:
             del self.connection_failures[name]
@@ -316,6 +335,25 @@ class Model:
             yield
         finally:
             self.runtime_status.active_tasks.remove(background_task)
+            self.notify_update()
+
+    @contextmanager
+    def report_and_notify_mcp_activity(self):
+        """
+        Mark an MCP tool invocation as running, for the status bar.
+
+        Increments the active count on entry and, on exit, decrements it and
+        records the finish time (so `is_mcp_active` keeps reporting work for a
+        short window after the last call). Must be entered on the background
+        thread, like other runtime-status mutations.
+        """
+        self.runtime_status.mcp_active_count += 1
+        self.notify_update()
+        try:
+            yield
+        finally:
+            self.runtime_status.mcp_active_count -= 1
+            self.runtime_status.last_mcp_activity = time.monotonic()
             self.notify_update()
 
     async def wait_for_initial_analysis(self):

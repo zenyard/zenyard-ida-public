@@ -338,14 +338,14 @@ class SwiftUiTask(Task):
         ):
             await ida_tasks.run_ui(
                 lambda: ida_kernwin.attach_action_to_menu(
-                    "Zenyard/Zenyard Agent",
+                    "Zenyard/Open Zenyard Agent",
                     OPEN_SWIFT_GLOW_NEW_TAB_ACTION_ID,
                     ida_kernwin.SETMENU_APP,
                 )
             )
             await ida_tasks.run_ui(
                 lambda: ida_kernwin.attach_action_to_menu(
-                    "Zenyard/Zenyard Agent",
+                    "Zenyard/Open Zenyard Agent",
                     OPEN_SWIFT_GLOW_ACTION_ID,
                     ida_kernwin.SETMENU_APP,
                 )

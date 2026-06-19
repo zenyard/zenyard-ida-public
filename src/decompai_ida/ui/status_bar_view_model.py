@@ -22,6 +22,10 @@ from decompai_ida.ui._status_bar_format import (
 # actually reported to user.
 _DISCONNECTION_GRACE_PERIOD = 60
 
+# Time, in seconds, the "Zenyard Agent is working" status lingers after the
+# last MCP tool invocation finished (cleared after this much inactivity).
+_MCP_INACTIVITY_TIMEOUT_SECONDS = 3.0
+
 _USAGE_PERCENT_FULL = Decimal(1.0)
 _USAGE_PERCENT_NEAR_END = Decimal(0.8)
 
@@ -75,6 +79,11 @@ class StatusBarViewModel(QObject):
 
         elif self._model.is_considered_paused:
             self._emit_status("Quota reached")
+
+        elif self._model.runtime_status.is_mcp_active(
+            inactivity_timeout=_MCP_INACTIVITY_TIMEOUT_SECONDS
+        ):
+            self._emit_status("Zenyard Agent is working...", progress="busy")
 
         elif self._is_background_task_active("waiting_for_ida"):
             self._emit_status(

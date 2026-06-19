@@ -39,6 +39,11 @@ class McpServerTask(Task):
         # so it must run on the main thread.
         server = await ida_tasks.run(self._build_server_sync)
 
+        # Building the server has imported the bridge (transitively, via the
+        # vendored package); import it now to wire tool invocations to the
+        # model so the status bar can show the agent is working.
+        from decompai_ida.mcp import bridge
+
         try:
             server.serve(config.mcp_host, config.mcp_port, background=True)
         except OSError as ex:
@@ -59,6 +64,9 @@ class McpServerTask(Task):
         # `server.stop()`. (`serve` cleans up after itself on the OSError path
         # above, so that case must stay outside this try.)
         try:
+            # Tools can now be invoked; route their activity to the model.
+            bridge.set_active_model(self._ctx.model)
+
             # With mcp_port=0 the OS assigns a free port; read back the real one.
             assert server._http_server is not None
             bound_port = server._http_server.server_address[1]
@@ -95,6 +103,7 @@ class McpServerTask(Task):
                                 self._invalidate_strings_cache_sync
                             )
         finally:
+            bridge.set_active_model(None)
             with anyio.CancelScope(shield=True):
                 await logger.ainfo("Stopping MCP server")
                 # stop() joins the serving thread; must run off that thread,

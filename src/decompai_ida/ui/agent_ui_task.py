@@ -36,16 +36,16 @@ class AgentUiTask(Task):
     async def _run(self) -> None:
         async with ida_tasks.install_action(
             action_id=OPEN_AGENT_ACTION_ID,
-            label="Zenyard Agent",
+            label="Open Zenyard Agent",
             handler=OpenAgentActionHandler(
                 web_ui=self._ctx.web_ui, model=self._ctx.model
             ),
-            shortcut="Ctrl+Alt+C",
+            shortcut="Ctrl+Alt+A",
             tooltip="Open the Zenyard Agent",
         ):
             await ida_tasks.run_ui(
                 lambda: ida_kernwin.attach_action_to_menu(
-                    "Zenyard/Zenyard Agent",
+                    "Zenyard/Open Zenyard Agent",
                     OPEN_AGENT_ACTION_ID,
                     0,
                 )

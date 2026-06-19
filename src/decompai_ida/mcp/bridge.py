@@ -33,6 +33,9 @@ from decompai_ida.mcp.vendor.zeromcp.jsonrpc import (
     get_current_cancel_event,
 )
 
+if ty.TYPE_CHECKING:
+    from decompai_ida.model import Model
+
 _DEFAULT_TOOL_TIMEOUT_SEC = 60.0
 
 # How often the waiting handler thread re-checks for timeout / cancellation
@@ -66,6 +69,18 @@ class CancelledError(RequestCancelledError):
 _main_thread_state = threading.local()
 
 
+# Model that tool invocations report MCP activity to, so the status bar can
+# show the agent is working. Registered by `McpServerTask` while its server is
+# up and cleared to None on teardown. Read/written on the event loop thread.
+_active_model: ty.Optional["Model"] = None
+
+
+def set_active_model(model: ty.Optional["Model"]) -> None:
+    """Register the model that tool invocations report MCP activity to."""
+    global _active_model
+    _active_model = model
+
+
 def get_pre_call_batch() -> ty.Optional[int]:
     """Return the pre-call batch state, or None if not inside a sync body."""
     return getattr(_main_thread_state, "pre_call_batch", None)
@@ -97,6 +112,29 @@ def _run_on_main(
         _main_thread_state.pre_call_batch = prev_pre_call
 
 
+async def _run_tool_body(
+    f: ty.Callable[..., ty.Any],
+    keep_batch_mode: bool,
+    args: tuple,
+    kwargs: dict,
+) -> ty.Any:
+    """Run a tool body on IDA's main thread, reporting MCP activity.
+
+    Runs on the event loop (background) thread, where runtime-status mutations
+    belong. Reporting is skipped when no model is registered (e.g. before the
+    server has fully started).
+    """
+    model = _active_model
+    if model is None:
+        return await ida_tasks.run(
+            _run_on_main, f, keep_batch_mode, args, kwargs
+        )
+    with model.report_and_notify_mcp_activity():
+        return await ida_tasks.run(
+            _run_on_main, f, keep_batch_mode, args, kwargs
+        )
+
+
 def idasync(f: ty.Callable[..., ty.Any]) -> ty.Callable[..., ty.Any]:
     """Run a tool body on the IDA main thread via the anyio event loop.
 
@@ -116,7 +154,7 @@ def idasync(f: ty.Callable[..., ty.Any]) -> ty.Callable[..., ty.Any]:
         loop = ida_tasks.AsyncCallback.get_event_loop()
 
         future = asyncio.run_coroutine_threadsafe(
-            ida_tasks.run(_run_on_main, f, keep_batch_mode, args, kwargs),
+            _run_tool_body(f, keep_batch_mode, args, kwargs),
             loop,
         )
 
